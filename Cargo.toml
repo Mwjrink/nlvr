@@ -1,0 +1,20 @@
+[package]
+name = "nlvr"
+version = "0.0.1"
+authors = ["Max Rink <mwjrink@gmail.com>"]
+edition = "2018"
+build = "build.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ash = "0.31"
+winit = "0.22"
+cgmath = "0.17"
+ash-window = "0.5"
+log = "0.4.11"
+simple_logger = "1.9.0"
+
+# cgmath = "0.17"
+# image = "0.23"
+# tobj = "2.0"
