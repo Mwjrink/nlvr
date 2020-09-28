@@ -5,6 +5,14 @@ authors = ["Max Rink <mwjrink@gmail.com>"]
 edition = "2018"
 build = "build.rs"
 
+[[bin]]
+name = "nlvr"
+path = "src/main.rs"
+
+[lib]
+name = "nlvr"
+path = "src/lib.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -14,6 +22,8 @@ cgmath = "0.17"
 ash-window = "0.5"
 log = "0.4.11"
 simple_logger = "1.9.0"
+image = "0.23.9"
+tobj = "2.0.2"
 
 # cgmath = "0.17"
 # image = "0.23"

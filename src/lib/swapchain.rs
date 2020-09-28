@@ -1,4 +1,5 @@
-use ash::{extensions::khr::Surface, vk};
+use ash::extensions::khr::Surface;
+use ash::vk;
 
 pub struct SwapchainSupportDetails {
     pub capabilities: vk::SurfaceCapabilitiesKHR,
