@@ -19,9 +19,9 @@ pub struct Texture {
 }
 
 fn to_x4<T,>(array: &[T],) -> &[T; 4] {
-    return array
+    array
         .try_into()
-        .expect("to_x4 has found a chunk with an incorrect length",);
+        .expect("to_x4 has found a chunk with an incorrect length",)
 }
 
 fn load_texture(file_name: &str,) -> Texture {

@@ -23,7 +23,8 @@ unsafe extern "system" fn vulkan_debug_callback(
     if flag == vk::DebugReportFlagsEXT::DEBUG {
         log::debug!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
     } else if flag == vk::DebugReportFlagsEXT::INFORMATION {
-        log::info!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
+        // INFO is spammy, dont log it for now
+        // log::info!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
     } else if flag == vk::DebugReportFlagsEXT::WARNING {
         log::warn!("{:?} - {:?}", typ, CStr::from_ptr(p_message));
     } else if flag == vk::DebugReportFlagsEXT::PERFORMANCE_WARNING {

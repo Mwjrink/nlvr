@@ -11,8 +11,24 @@ use std::{ffi::{CStr, CString},
           mem::{align_of, size_of}};
 use winit::window::Window;
 
-const ENABLE_VALIDATION_LAYERS: bool = false;
+// grab this from the debug file I guess, or make it so the debug file is only loaded when this is true
+const ENABLE_VALIDATION_LAYERS: bool = true;
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+
+pub struct HotContext {
+    pub(crate) swapchain_image_index: u32,
+}
+
+// VkContext
+// pub struct ColdContext {
+//     _entry:                Entry,
+//     instance:              Instance,
+//     debug_report_callback: Option<(DebugReport, vk::DebugReportCallbackEXT,),>,
+//     surface:               Surface,
+//     surface_khr:           vk::SurfaceKHR,
+//     physical_device:       vk::PhysicalDevice,
+//     device:                Device,
+// }
 
 pub struct VulkanApp {
     camera:              Camera,
@@ -248,9 +264,7 @@ impl VulkanApp {
             .api_version(vk::make_version(1, 2, 148,),)
             .build();
 
-        let mut extension_names = ash_window::enumerate_required_extensions(window,).unwrap();
-        extension_names.push(ash::extensions::ext::DebugReport::name(),);
-        // extension_names.push(ash::extensions::nv::MeshShader::name(),);
+        let extension_names = ash_window::enumerate_required_extensions(window,).unwrap();
 
         let mut extension_names = extension_names.iter().map(|ext| ext.as_ptr(),).collect::<Vec<_,>>();
         if ENABLE_VALIDATION_LAYERS {
@@ -1929,6 +1943,7 @@ impl VulkanApp {
     }
 
     pub fn draw_frame(&mut self,) -> bool {
+        // take hot param as mut and use its swapchain index
         let sync_objects = self.in_flight_frames.next().unwrap();
         let image_available_semaphore = sync_objects.image_available_semaphore;
         let render_finished_semaphore = sync_objects.render_finished_semaphore;
@@ -2003,6 +2018,7 @@ impl VulkanApp {
                 _ => {},
             }
         }
+        // acquire swapchain image index and store it in hot
 
         false
     }
