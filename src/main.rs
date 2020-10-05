@@ -1,4 +1,4 @@
-use nlvr::lib::vulkan::*;
+use nlvr::lib::{camera::*, context::*, debug::*, fs, math, swapchain::*, texture::*, vulkan::*};
 
 // use winit::monitor::VideoMode;
 // use winit::window::Fullscreen::Exclusive;
@@ -10,6 +10,8 @@ use winit::{event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEv
             window::WindowBuilder};
 
 use std::time::{Duration, Instant};
+
+const FRAMES_AVERAGE: u32 = 5;
 
 // use vulkan;
 
@@ -31,7 +33,9 @@ fn main() {
 
     // event_loop.available_monitors();
 
-    let mut avg = Duration::from_millis(0,);
+    let mut frames = vec![0.0; FRAMES_AVERAGE as usize];
+    let mut frame_index = 0;
+    let mut avg = 0;
     let mut last = Instant::now();
 
     let mut dirty_swapchain = true;
@@ -58,9 +62,9 @@ fn main() {
                 let now = Instant::now();
                 let delta = now.duration_since(last,);
                 last = now;
-                avg = (avg + delta) / 2;
-                // window.push_back(delta);
-                // println!("{:?}", avg.as_nanos());
+                frames[frame_index] = delta.as_nanos() as f64;
+                frame_index = (frame_index + 1) % (FRAMES_AVERAGE as usize);
+                let fps: f64 = f64::from(FRAMES_AVERAGE,) / frames.iter().sum::<f64>();
             },
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -80,6 +84,33 @@ fn main() {
                     }
                     app.wheel_delta = wheel_delta;
                 }
+
+                // Update uniform buffers
+                // {
+                //     if let Some(ilc) = is_left_clicked && cursor_delta.is_some() {
+                //         let delta = cursor_delta.take().unwrap();
+                //         let x_ratio = delta[0] as f32 / swapchain_properties.extent.width as f32;
+                //         let y_ratio = delta[1] as f32 / swapchain_properties.extent.height as f32;
+                //         let theta = x_ratio * 180.0_f32.to_radians();
+                //         let phi = y_ratio * 90.0_f32.to_radians();
+                //         camera.rotate(theta, phi,);
+                //     }
+                //     if let Some(wheel_delta,) = wheel_delta {
+                //         camera.forward(wheel_delta * 0.3,);
+                //     }
+
+                //     let aspect = swapchain_properties.extent.width as f32 / swapchain_properties.extent.height as
+                // f32;     let ubo = CameraUBO {
+                //         view: Matrix4::look_at(
+                //             camera.position(),
+                //             Point3::new(0.0, 0.0, 0.0,),
+                //             Vector3::new(0.0, 1.0, 0.0,),
+                //         ),
+                //         proj: math::perspective(Deg(45.0,), aspect, 0.1, 10.0,),
+                //     };
+                //     let ubos = [ubo,];
+                //     app.update_uniform_buffers(hot, ubos,);
+                // }
 
                 // render
                 {

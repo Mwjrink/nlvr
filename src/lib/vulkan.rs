@@ -13,10 +13,16 @@ use winit::window::Window;
 
 // grab this from the debug file I guess, or make it so the debug file is only loaded when this is true
 const ENABLE_VALIDATION_LAYERS: bool = true;
-const MAX_FRAMES_IN_FLIGHT: u32 = 2;
+const MAX_FRAMES_IN_FLIGHT: u32 = 3;
 
-pub struct HotContext {
+pub struct PerFrameData {
     pub(crate) swapchain_image_index: u32,
+    /* command pool
+     * command buffers
+     * sync objects
+     * descriptor pool
+     * descriptor sets
+     */
 }
 
 // VkContext
@@ -89,6 +95,7 @@ impl VulkanApp {
 
         let (physical_device, queue_families_indices,) = Self::pick_physical_device(&instance, &surface, surface_khr,);
 
+        // move to a queue class potentially
         let (device, graphics_queue, present_queue,) =
             Self::create_logical_device_with_graphics_queue(&instance, physical_device, queue_families_indices,);
 
@@ -115,13 +122,16 @@ impl VulkanApp {
         // Breakpoint
 
         let render_pass = Self::create_render_pass(vk_context.device(), properties, msaa_samples, depth_format,);
-        let descriptor_set_layout = Self::create_descriptor_set_layout(vk_context.device(),);
+        let descriptor_set_layout =
+            Self::create_descriptor_set_layout(vk_context.device(), CameraUBO::get_descriptor_set_layout_binding(),);
         let (pipeline, layout,) = Self::create_pipeline(
             vk_context.device(),
             properties,
             msaa_samples,
             render_pass,
             descriptor_set_layout,
+            Vertex::get_binding_description(),
+            &Vertex::get_attribute_descriptions(),
         );
 
         log::debug!("Create command pool");
@@ -673,8 +683,11 @@ impl VulkanApp {
         unsafe { device.create_render_pass(&render_pass_info, None,).unwrap() }
     }
 
-    fn create_descriptor_set_layout(device: &Device,) -> vk::DescriptorSetLayout {
-        let ubo_binding = CameraUBO::get_descriptor_set_layout_binding();
+    fn create_descriptor_set_layout(
+        device: &Device,
+        ubo_binding: vk::DescriptorSetLayoutBinding,
+    ) -> vk::DescriptorSetLayout
+    {
         let sampler_binding = vk::DescriptorSetLayoutBinding::builder()
             .binding(1,)
             .descriptor_count(1,)
@@ -774,6 +787,8 @@ impl VulkanApp {
         msaa_samples: vk::SampleCountFlags,
         render_pass: vk::RenderPass,
         descriptor_set_layout: vk::DescriptorSetLayout,
+        vertex_binding_descs: vk::VertexInputBindingDescription,
+        vertex_attribute_descs: &[vk::VertexInputAttributeDescription],
     ) -> (vk::Pipeline, vk::PipelineLayout,)
     {
         let vertex_source = Self::read_shader_from_file("shaders/shader.vert.spv",);
@@ -797,8 +812,9 @@ impl VulkanApp {
             .build();
         let shader_states_infos = [vertex_shader_state_info, fragment_shader_state_info,];
 
-        let vertex_binding_descs = [Vertex::get_binding_description(),];
-        let vertex_attribute_descs = Vertex::get_attribute_descriptions();
+        // let vertex_binding_descs = [Vertex::get_binding_description(),];
+        // let vertex_attribute_descs = Vertex::get_attribute_descriptions();
+        let vertex_binding_descs = [vertex_binding_descs,];
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
             .vertex_binding_descriptions(&vertex_binding_descs,)
             .vertex_attribute_descriptions(&vertex_attribute_descs,)
@@ -988,6 +1004,7 @@ impl VulkanApp {
         msaa_samples: vk::SampleCountFlags,
     ) -> Texture
     {
+        // TODO make this a function in image
         let format = swapchain_properties.format.format;
         let (image, memory,) = Self::create_image(
             vk_context,
@@ -2055,6 +2072,8 @@ impl VulkanApp {
             self.msaa_samples,
             render_pass,
             self.descriptor_set_layout,
+            Vertex::get_binding_description(),
+            &Vertex::get_attribute_descriptions(),
         );
 
         let color_texture = Self::create_color_texture(
@@ -2249,6 +2268,12 @@ impl Iterator for InFlightFrames {
     }
 }
 
+// until static methods in traits are a thing
+// trait Vertex {
+//     fn get_binding_description() -> vk::VertexInputBindingDescription;
+//     fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2];
+// }
+
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
 struct Vertex {
@@ -2309,8 +2334,81 @@ impl CameraUBO {
     }
 }
 
+// utility functions
+
 /// Return a `&[u8]` for any sized object passed in.
 unsafe fn any_as_u8_slice<T: Sized,>(any: &T,) -> &[u8] {
     let ptr = (any as *const T) as *const u8;
     std::slice::from_raw_parts(ptr, std::mem::size_of::<T,>(),)
+}
+
+/// Create a one time use command buffer and pass it to `executor`.
+pub fn execute_one_time_commands<F: FnOnce(vk::CommandBuffer,),>(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    queue: vk::Queue,
+    executor: F,
+)
+{
+    let command_buffer = {
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .level(vk::CommandBufferLevel::PRIMARY,)
+            .command_pool(command_pool,)
+            .command_buffer_count(1,)
+            .build();
+
+        unsafe { device.allocate_command_buffers(&alloc_info,).unwrap()[0] }
+    };
+    let command_buffers = [command_buffer,];
+
+    // Begin recording
+    {
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,)
+            .build();
+        unsafe { device.begin_command_buffer(command_buffer, &begin_info,).unwrap() };
+    }
+
+    // Execute user function
+    executor(command_buffer,);
+
+    // End recording
+    unsafe { device.end_command_buffer(command_buffer,).unwrap() };
+
+    // Submit and wait
+    {
+        let submit_info = vk::SubmitInfo::builder().command_buffers(&command_buffers,).build();
+        let submit_infos = [submit_info,];
+        unsafe {
+            device.queue_submit(queue, &submit_infos, vk::Fence::null(),).unwrap();
+            device.queue_wait_idle(queue,).unwrap();
+        };
+    }
+
+    // Free
+    unsafe { device.free_command_buffers(command_pool, &command_buffers,) };
+}
+
+/// Find a memory type in `mem_properties` that is suitable
+/// for `requirements` and supports `required_properties`.
+///
+/// # Returns
+///
+/// The index of the memory type from `mem_properties`.
+pub fn find_memory_type(
+    requirements: vk::MemoryRequirements,
+    mem_properties: vk::PhysicalDeviceMemoryProperties,
+    required_properties: vk::MemoryPropertyFlags,
+) -> u32
+{
+    for i in 0..mem_properties.memory_type_count {
+        if requirements.memory_type_bits & (1 << i) != 0 &&
+            mem_properties.memory_types[i as usize]
+                .property_flags
+                .contains(required_properties,)
+        {
+            return i;
+        }
+    }
+    panic!("Failed to find suitable memory type.")
 }
