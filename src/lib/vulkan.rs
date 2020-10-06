@@ -1,4 +1,13 @@
-use super::{camera::*, context::*, debug::*, fs, math, swapchain::*, texture::*};
+use super::{camera::*,
+            context::*,
+            debug::*,
+            fs,
+            image::*,
+            math,
+            queuefamilyindices::*,
+            swapchainproperties::*,
+            swapchainsupportdetails::*,
+            texture::*};
 use ash::{extensions::{ext::DebugReport,
                        khr::{Surface, Swapchain}},
           version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
@@ -12,18 +21,7 @@ use std::{ffi::{CStr, CString},
 use winit::window::Window;
 
 // grab this from the debug file I guess, or make it so the debug file is only loaded when this is true
-const ENABLE_VALIDATION_LAYERS: bool = true;
 const MAX_FRAMES_IN_FLIGHT: u32 = 3;
-
-pub struct PerFrameData {
-    pub(crate) swapchain_image_index: u32,
-    /* command pool
-     * command buffers
-     * sync objects
-     * descriptor pool
-     * descriptor sets
-     */
-}
 
 // VkContext
 // pub struct ColdContext {
@@ -107,6 +105,7 @@ impl VulkanApp {
             surface_khr,
             physical_device,
             device,
+            queue_families_indices,
         );
 
         let (swapchain, swapchain_khr, properties, images,) =
@@ -1004,7 +1003,6 @@ impl VulkanApp {
         msaa_samples: vk::SampleCountFlags,
     ) -> Texture
     {
-        // TODO make this a function in image
         let format = swapchain_properties.format.format;
         let (image, memory,) = Self::create_image(
             vk_context,
@@ -1030,7 +1028,14 @@ impl VulkanApp {
 
         let view = Self::create_image_view(vk_context.device(), image, 1, format, vk::ImageAspectFlags::COLOR,);
 
-        Texture::new(image, memory, view, None,)
+        Texture {
+            image:   Image {
+                image,
+                memory,
+                view: Some(view,),
+            },
+            sampler: None,
+        }
     }
 
     /// Create the depth buffer texture (image, memory and view).
@@ -2215,11 +2220,11 @@ impl Drop for VulkanApp {
     }
 }
 
-#[derive(Clone, Copy)]
-struct QueueFamiliesIndices {
-    graphics_index: u32,
-    present_index:  u32,
-}
+// #[derive(Clone, Copy)]
+// struct QueueFamiliesIndices {
+//     graphics_index: u32,
+//     present_index:  u32,
+// }
 
 #[derive(Clone, Copy)]
 struct SyncObjects {
@@ -2411,4 +2416,8 @@ pub fn find_memory_type(
         }
     }
     panic!("Failed to find suitable memory type.")
+}
+
+pub fn wait_gpu_idle(vk_context: &VkContext,) {
+    unsafe { vk_context.device().device_wait_idle().unwrap() };
 }

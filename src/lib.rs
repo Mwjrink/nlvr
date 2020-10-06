@@ -9,10 +9,16 @@ pub mod lib {
     pub mod math;
     pub mod queuefamilyindices;
     pub mod reader;
+    pub mod renderable;
+    pub mod renderinstance;
+    pub mod shaders;
     pub mod swapchain;
     pub mod swapchainproperties;
     pub mod swapchainsupportdetails;
     pub mod syncobjects;
     pub mod texture;
+    pub mod ubo;
+    pub mod utils;
+    pub mod vertex;
     pub mod vulkan;
 }

@@ -1,4 +1,4 @@
-use super::{buffer::*, context::*, fs, image::*, vulkan::*};
+use super::{buffer::*, context::*, fs, image::*, swapchainproperties::*, vulkan::*};
 use ash::{version::{DeviceV1_0, InstanceV1_0},
           vk,
           Device};
@@ -8,6 +8,21 @@ use std::mem::{align_of, size_of};
 pub struct Texture {
     pub image:   Image,
     pub sampler: Option<vk::Sampler,>,
+    /* vks::VulkanDevice *   device;
+     * VkImage               image;
+     * VkImageLayout         imageLayout;
+     * VkDeviceMemory        deviceMemory;
+     * VkImageView           view;
+     * uint32_t              width, height;
+     * uint32_t              mipLevels;
+     * uint32_t              layerCount;
+     * VkDescriptorImageInfo descriptor;
+     * VkSampler             sampler;
+     *
+     * void      updateDescriptor();
+     * void      destroy();
+     * ktxResult loadKTXFile(std::string filename, ktxTexture **target);
+     */
 }
 
 impl Texture {
@@ -135,7 +150,7 @@ impl Texture {
         }
     }
 
-    fn generate_mipmaps(
+    pub fn generate_mipmaps(
         vk_context: &VkContext,
         command_pool: vk::CommandPool,
         transfer_queue: vk::Queue,
@@ -285,5 +300,86 @@ impl Texture {
                 )
             };
         },);
+    }
+
+    pub fn create_color_texture(
+        vk_context: &VkContext,
+        command_pool: vk::CommandPool,
+        transition_queue: vk::Queue,
+        swapchain_properties: SwapchainProperties,
+        msaa_samples: vk::SampleCountFlags,
+    ) -> Self
+    {
+        let format = swapchain_properties.format.format;
+        let image = Image::create_image(
+            vk_context,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            swapchain_properties.extent,
+            1,
+            msaa_samples,
+            format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSIENT_ATTACHMENT | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        );
+
+        image.transition_image_layout(
+            vk_context.device(),
+            command_pool,
+            transition_queue,
+            1,
+            format,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
+
+        let view = image.create_image_view(vk_context.device(), 1, format, vk::ImageAspectFlags::COLOR,);
+
+        Texture {
+            image,
+            sampler: None,
+        }
+    }
+
+    /// Create the depth buffer texture (image, memory and view).
+    ///
+    /// This function also transitions the image to be ready to be used
+    /// as a depth/stencil attachement.
+    pub fn create_depth_texture(
+        vk_context: &VkContext,
+        command_pool: vk::CommandPool,
+        transition_queue: vk::Queue,
+        format: vk::Format,
+        extent: vk::Extent2D,
+        msaa_samples: vk::SampleCountFlags,
+    ) -> Texture
+    {
+        let image = Image::create_image(
+            vk_context,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            extent,
+            1,
+            msaa_samples,
+            format,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        );
+
+        let device = vk_context.device();
+        image.transition_image_layout(
+            device,
+            command_pool,
+            transition_queue,
+            1,
+            format,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        );
+
+        let view = image.create_image_view(device, 1, format, vk::ImageAspectFlags::DEPTH,);
+
+        Texture {
+            image,
+            sampler: None,
+        }
     }
 }
