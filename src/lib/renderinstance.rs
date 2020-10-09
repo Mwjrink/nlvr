@@ -12,6 +12,7 @@ use super::{buffer::*,
             swapchain::*,
             swapchainproperties::*,
             swapchainsupportdetails::*,
+            syncobjects::*,
             texture::*,
             ubo::*,
             utils::*,
@@ -29,48 +30,45 @@ use std::{ffi::{CStr, CString},
           mem::{align_of, size_of}};
 use winit::window::Window;
 
-pub struct RenderInstance<'a,> {
+const MAX_FRAMES_IN_FLIGHT: u32 = 3;
+
+pub struct RenderInstance {
     vk_context:             VkContext,
     //
-    pipeline_layout:        vk::PipelineLayout,
-    pipeline:               vk::Pipeline,
-    command_buffers:        Vec<vk::CommandBuffer,>,
-    msaa_samples:           vk::SampleCountFlags,
-    descriptor_set_layout:  vk::DescriptorSetLayout,
     swapchain:              SwapchainWrapper,
+    pipeline:               vk::Pipeline,
+    pipeline_layout:        vk::PipelineLayout,
     render_pass:            vk::RenderPass,
-    //
+    msaa_samples:           vk::SampleCountFlags,
+    depth_format:           vk::Format,
+    descriptor_set_layout:  vk::DescriptorSetLayout,
     command_pool:           vk::CommandPool,
     transient_command_pool: vk::CommandPool,
     in_flight_frames:       InFlightFrames,
-    //
-    framebuffers:           Vec<vk::Framebuffer,>,
-    vertex_binding_descs:   vk::VertexInputBindingDescription,
-    vertex_attribute_descs: &'a [vk::VertexInputAttributeDescription],
-    model_index_count:      usize,
-    texture:                Texture,
-    descriptor_pool:        vk::DescriptorPool,
-    descriptor_sets:        Vec<vk::DescriptorSet,>,
-    //
     graphics_queue:         vk::Queue,
     present_queue:          vk::Queue,
+    // this is here because it depends on the renderpass
+    framebuffers:           Vec<vk::Framebuffer,>,
+    // TODO: this will be known at compile time when this is all finalized so make this an array eventually
+    vertex_attribute_descs: Vec<vk::VertexInputAttributeDescription,>,
+    vertex_binding_descs:   vk::VertexInputBindingDescription,
+    // descriptor_pool:        vk::DescriptorPool,
+    // descriptor_sets:        Vec<vk::DescriptorSet,>,
+    // ...
     // make these two Option<vk::Queue> and then use them if they exist but fall back on graphics queue
     transfer_queue:         vk::Queue,
-    // this is the master pool, the command buffers are run on this and they consist of many models, vertices, indices
-    // and texture index for a texture array
-    vertex_buffer:          vk::Buffer,
-    vertex_buffer_memory:   vk::DeviceMemory,
-    index_buffer:           vk::Buffer,
-    index_buffer_memory:    vk::DeviceMemory,
-    //
-    frames_in_flight:       usize,
-    //
-    depth_format:           vk::Format,
+    /* this is the master pool, the command buffers are run on this and they consist of many models, vertices,
+     * indices and texture index for a texture array
+     * model_index_count:      usize,
+     * vertex_buffer:          Buffer,
+     * index_buffer:           Buffer, */
 }
 
-impl RenderInstance<'_,> {
+impl RenderInstance {
     pub fn create(window: &Window,) -> RenderInstance {
         log::debug!("Creating application.");
+
+        let frames_in_flight = 3;
 
         let entry = Entry::new().expect("Failed to create entry.",);
         let instance = Self::create_instance(&entry, window,);
@@ -83,7 +81,7 @@ impl RenderInstance<'_,> {
         let (physical_device, queue_families_indices,) = Self::pick_physical_device(&instance, &surface, surface_khr,);
 
         // move to a queue class potentially
-        let (device, graphics_queue, present_queue,) =
+        let (device, graphics_queue, present_queue, transfer_queue,) =
             Self::create_logical_device_with_graphics_queue(&instance, physical_device, queue_families_indices,);
 
         let vk_context = VkContext::new(
@@ -97,24 +95,32 @@ impl RenderInstance<'_,> {
             queue_families_indices,
         );
 
-        let (swapchain, swapchain_khr, properties, images,) =
-            Self::create_swapchain_and_images(&vk_context, queue_families_indices, [
-                window.inner_size().width,
-                window.inner_size().height,
-            ],);
-        let swapchain_image_views = Self::create_swapchain_image_views(vk_context.device(), &images, properties,);
+        let command_pool = Self::create_command_pool(
+            vk_context.device(),
+            queue_families_indices,
+            vk::CommandPoolCreateFlags::empty(),
+        );
 
-        let msaa_samples = vk_context.get_max_usable_sample_count();
         let depth_format = Self::find_depth_format(&vk_context,);
+        let msaa_samples = vk_context.get_max_usable_sample_count();
 
-        // Breakpoint
+        let swapchain = SwapchainWrapper::create_swapchain_and_images(
+            &vk_context,
+            queue_families_indices,
+            [window.inner_size().width, window.inner_size().height,],
+            command_pool,
+            graphics_queue,
+            msaa_samples,
+            depth_format,
+        );
 
-        let render_pass = Self::create_render_pass(vk_context.device(), properties, msaa_samples, depth_format,);
+        let render_pass =
+            Self::create_render_pass(vk_context.device(), swapchain.properties, msaa_samples, depth_format,);
         let descriptor_set_layout =
             Self::create_descriptor_set_layout(vk_context.device(), CameraUBO::get_descriptor_set_layout_binding(),);
         let (pipeline, layout,) = Self::create_pipeline(
             vk_context.device(),
-            properties,
+            swapchain.properties,
             msaa_samples,
             render_pass,
             descriptor_set_layout,
@@ -122,87 +128,23 @@ impl RenderInstance<'_,> {
             &Vertex::get_attribute_descriptions(),
         );
 
-        log::debug!("Create command pool");
-
-        let command_pool = Self::create_command_pool(
-            vk_context.device(),
-            queue_families_indices,
-            vk::CommandPoolCreateFlags::empty(),
-        );
-
-        log::debug!("Create transient command pool");
-
         let transient_command_pool = Self::create_command_pool(
             vk_context.device(),
             queue_families_indices,
             vk::CommandPoolCreateFlags::TRANSIENT,
         );
 
-        log::debug!("Create color texture");
-
-        let color_texture =
-            Self::create_color_texture(&vk_context, command_pool, graphics_queue, properties, msaa_samples,);
-
-        log::debug!("Create depth texture");
-
-        let depth_texture = Self::create_depth_texture(
-            &vk_context,
-            command_pool,
-            graphics_queue,
-            depth_format,
-            properties.extent,
-            msaa_samples,
-        );
-
-        log::debug!("Create swapchain framebuffers");
-
         let swapchain_framebuffers = Self::create_framebuffers(
             vk_context.device(),
-            &swapchain_image_views,
-            color_texture,
-            depth_texture,
+            &swapchain
+                .images
+                .iter()
+                .map(|image| image.view.unwrap(),)
+                .collect::<Vec<vk::ImageView,>>(),
+            swapchain.color_texture,
+            swapchain.depth_texture,
             render_pass,
-            properties,
-        );
-
-        log::debug!("Create texture image");
-
-        let texture = Self::create_texture_image(&vk_context, command_pool, graphics_queue,);
-
-        log::debug!("Load model");
-
-        let (vertices, indices,) = Self::load_model();
-        let (vertex_buffer, vertex_buffer_memory,) =
-            Self::create_vertex_buffer(&vk_context, transient_command_pool, graphics_queue, &vertices,);
-        let (index_buffer, index_buffer_memory,) =
-            Self::create_index_buffer(&vk_context, transient_command_pool, graphics_queue, &indices,);
-        let (uniform_buffers, uniform_buffer_memories,) = Self::create_uniform_buffers(&vk_context, images.len(),);
-
-        log::debug!("Create descriptor sets & pool");
-
-        let descriptor_pool = Self::create_descriptor_pool(vk_context.device(), images.len() as _,);
-        let descriptor_sets = Self::create_descriptor_sets(
-            vk_context.device(),
-            descriptor_pool,
-            descriptor_set_layout,
-            &uniform_buffers,
-            texture,
-        );
-
-        log::debug!("Create and register command buffers");
-
-        let command_buffers = Self::create_and_register_command_buffers(
-            vk_context.device(),
-            command_pool,
-            &swapchain_framebuffers,
-            render_pass,
-            properties,
-            vertex_buffer,
-            index_buffer,
-            indices.len(),
-            layout,
-            &descriptor_sets,
-            pipeline,
+            swapchain.properties,
         );
 
         log::debug!("Create sync objects");
@@ -210,87 +152,38 @@ impl RenderInstance<'_,> {
         let in_flight_frames = Self::create_sync_objects(vk_context.device(),);
 
         Self {
-            camera: Default::default(),
-            is_left_clicked: false,
-            cursor_position: [0, 0,],
-            cursor_delta: None,
-            wheel_delta: None,
-            //
+            // camera: Default::default(),
+            // is_left_clicked: false,
+            // cursor_position: [0, 0,],
+            // cursor_delta: None,
+            // wheel_delta: None,
             vk_context,
-            queue_families_indices,
-            graphics_queue,
-            present_queue,
-            swapchain,
-            swapchain_khr,
-            swapchain_properties: properties,
-            images,
-            swapchain_image_views,
-            render_pass,
-            descriptor_set_layout,
             pipeline_layout: layout,
             pipeline,
-            swapchain_framebuffers,
+            msaa_samples,
+            descriptor_set_layout,
+            swapchain,
+            render_pass,
             command_pool,
             transient_command_pool,
-            msaa_samples,
-            color_texture,
-            depth_format,
-            depth_texture,
-            texture,
-            model_index_count: indices.len(),
-            vertex_buffer,
-            vertex_buffer_memory,
-            index_buffer,
-            index_buffer_memory,
-            uniform_buffers,
-            uniform_buffer_memories,
-            descriptor_pool,
-            descriptor_sets,
-            command_buffers,
             in_flight_frames,
+            framebuffers: swapchain_framebuffers,
+            vertex_binding_descs: Vertex::get_binding_description(),
+            vertex_attribute_descs: Vec::from(Vertex::get_attribute_descriptions(),),
+            graphics_queue,
+            present_queue,
+            transfer_queue,
+            depth_format,
         }
-
-        // vk_context:             VkContext,
-        // pipeline_layout:        vk::PipelineLayout,
-        // pipeline:               vk::Pipeline,
-        // command_buffers:        Vec<vk::CommandBuffer,>,
-        // msaa_samples:           vk::SampleCountFlags,
-        // descriptor_set_layout:  vk::DescriptorSetLayout,
-        // swapchain:              SwapchainWrapper,
-        // render_pass:            vk::RenderPass,
-        // command_pool:           vk::CommandPool,
-        // transient_command_pool: vk::CommandPool,
-        // in_flight_frames:       InFlightFrames,
-        // framebuffers:           Vec<vk::Framebuffer,>,
-        // vertex_binding_descs:   vk::VertexInputBindingDescription,
-        // vertex_attribute_descs: &'a [vk::VertexInputAttributeDescription],
-        // model_index_count:      usize,
-        // texture:                Texture,
-        // descriptor_pool:        vk::DescriptorPool,
-        // descriptor_sets:        Vec<vk::DescriptorSet,>,
-        // graphics_queue:         vk::Queue,
-        // present_queue:          vk::Queue,
-        // transfer_queue:         vk::Queue,
-        // vertex_buffer:          vk::Buffer,
-        // vertex_buffer_memory:   vk::DeviceMemory,
-        // index_buffer:           vk::Buffer,
-        // index_buffer_memory:    vk::DeviceMemory,
-        // frames_in_flight:       usize,
-        // depth_format:           vk::Format,
     }
 
-    pub fn create_renderable_from_file(&self, asset_path: String,) -> Renderable {
-        // TODO: use reader
+    pub fn renderable_from_file(&self, asset_path: String,) -> Renderable {
+        let texture_path = asset_path.clone();
+        texture_path.push_str(".jpg",);
+        let texture =
+            Texture::create_texture_image(&self.vk_context, self.command_pool, self.graphics_queue, texture_path,);
 
-        asset_path.push_str(".jpg",);
-        let texture = Texture::create_texture_image(
-            &self.vk_context,
-            self.command_pool,
-            self.graphics_queue,
-            asset_path.as_str(),
-        );
-
-        let (vertices, indices,) = Self::load_model();
+        let (vertices, indices,) = Self::load_model(asset_path,);
         let vertex_buffer = Self::create_vertex_buffer(
             &self.vk_context,
             self.transient_command_pool,
@@ -303,9 +196,9 @@ impl RenderInstance<'_,> {
             self.graphics_queue,
             &indices,
         );
-        let uniform_buffers = Self::create_uniform_buffers(&self.vk_context, self.frames_in_flight,);
+        let uniform_buffers = Self::create_uniform_buffers(&self.vk_context, MAX_FRAMES_IN_FLIGHT as _,);
 
-        let descriptor_pool = Self::create_descriptor_pool(self.vk_context.device(), self.frames_in_flight as _,);
+        let descriptor_pool = Self::create_descriptor_pool(self.vk_context.device(), MAX_FRAMES_IN_FLIGHT as _,);
         let descriptor_sets = Self::create_descriptor_sets(
             self.vk_context.device(),
             descriptor_pool,
@@ -317,23 +210,79 @@ impl RenderInstance<'_,> {
             texture,
         );
 
+        // add to overall vertex buffers and overall index count/buffers?
+        let vertex_buffer = Self::create_vertex_buffer(
+            &self.vk_context,
+            self.transient_command_pool,
+            self.graphics_queue,
+            &vertices,
+        );
+        let index_buffer = Self::create_index_buffer(
+            &self.vk_context,
+            self.transient_command_pool,
+            self.graphics_queue,
+            &indices,
+        );
+
+        // self.vertex_buffer.add some shit to it
+
         Renderable {
             model_index_count: indices.len(),
             texture,
             descriptor_pool,
             descriptor_sets,
-            //
             uniform_buffers,
             vertex_buffer,
             index_buffer,
             //
             asset_path,
+            // command_buffers,
         }
     }
 
-    fn load_model() -> (Vec<Vertex,>, Vec<u32,>,) {
-        log::debug!("Loading model.");
-        let mut cursor = fs::load("models/chalet.obj",);
+    fn create_sync_objects(device: &Device,) -> InFlightFrames {
+        let mut sync_objects_vec = Vec::new();
+        for _ in 0..MAX_FRAMES_IN_FLIGHT {
+            sync_objects_vec.push(SyncObjects::create(device,),)
+        }
+
+        InFlightFrames::new(sync_objects_vec,)
+    }
+
+    fn create_instance(entry: &Entry, window: &Window,) -> Instance {
+        let app_name = CString::new("Vulkan Application",).unwrap();
+        let engine_name = CString::new("No Engine",).unwrap();
+        let app_info = vk::ApplicationInfo::builder()
+            .application_name(app_name.as_c_str(),)
+            .application_version(vk::make_version(0, 1, 0,),)
+            .engine_name(engine_name.as_c_str(),)
+            .engine_version(vk::make_version(0, 1, 0,),)
+            .api_version(vk::make_version(1, 2, 148,),)
+            .build();
+
+        let extension_names = ash_window::enumerate_required_extensions(window,).unwrap();
+
+        let mut extension_names = extension_names.iter().map(|ext| ext.as_ptr(),).collect::<Vec<_,>>();
+        if ENABLE_VALIDATION_LAYERS {
+            extension_names.push(DebugReport::name().as_ptr(),);
+        }
+
+        let (_layer_names, layer_names_ptrs,) = get_layer_names_and_pointers();
+
+        let mut instance_create_info = vk::InstanceCreateInfo::builder()
+            .application_info(&app_info,)
+            .enabled_extension_names(&extension_names,);
+        if ENABLE_VALIDATION_LAYERS {
+            check_validation_layer_support(&entry,);
+            instance_create_info = instance_create_info.enabled_layer_names(&layer_names_ptrs,);
+        }
+
+        unsafe { entry.create_instance(&instance_create_info, None,).unwrap() }
+    }
+
+    fn load_model(asset_path: String,) -> (Vec<Vertex,>, Vec<u32,>,) {
+        asset_path.push_str(".obj",);
+        let mut cursor = fs::load(asset_path,);
         let (models, _,) =
             tobj::load_obj_buf(&mut cursor, true, |_| Ok((vec![], std::collections::HashMap::new(),),),).unwrap();
 
@@ -443,7 +392,7 @@ impl RenderInstance<'_,> {
 
                 let image_info = vk::DescriptorImageInfo::builder()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,)
-                    .image_view(texture.view,)
+                    .image_view(texture.image.view.unwrap(),)
                     .sampler(texture.sampler.unwrap(),)
                     .build();
                 let image_infos = [image_info,];
@@ -486,6 +435,52 @@ impl RenderInstance<'_,> {
         }
 
         buffers
+    }
+
+    fn find_depth_format(vk_context: &VkContext,) -> vk::Format {
+        let candidates = vec![
+            vk::Format::D32_SFLOAT,
+            vk::Format::D32_SFLOAT_S8_UINT,
+            vk::Format::D24_UNORM_S8_UINT,
+        ];
+        vk_context
+            .find_supported_format(
+                &candidates,
+                vk::ImageTiling::OPTIMAL,
+                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+            )
+            .expect("Failed to find a supported depth format",)
+    }
+
+    fn create_framebuffers(
+        device: &Device,
+        image_views: &[vk::ImageView],
+        color_texture: Texture,
+        depth_texture: Texture,
+        render_pass: vk::RenderPass,
+        swapchain_properties: SwapchainProperties,
+    ) -> Vec<vk::Framebuffer,>
+    {
+        image_views
+            .iter()
+            .map(|view| {
+                [
+                    color_texture.image.view.unwrap(),
+                    depth_texture.image.view.unwrap(),
+                    *view,
+                ]
+            },)
+            .map(|attachments| {
+                let framebuffer_info = vk::FramebufferCreateInfo::builder()
+                    .render_pass(render_pass,)
+                    .attachments(&attachments,)
+                    .width(swapchain_properties.extent.width,)
+                    .height(swapchain_properties.extent.height,)
+                    .layers(1,)
+                    .build();
+                unsafe { device.create_framebuffer(&framebuffer_info, None,).unwrap() }
+            },)
+            .collect::<Vec<_,>>()
     }
 
     /// Recreates the swapchain.
@@ -539,6 +534,7 @@ impl RenderInstance<'_,> {
             self.vertex_attribute_descs,
         );
 
+        // this needs to be rebuilt in the renderable objects?
         let command_buffers = Self::create_and_register_command_buffers(
             device,
             self.command_pool,
@@ -580,7 +576,6 @@ impl RenderInstance<'_,> {
         self.pipeline = pipeline;
         self.pipeline_layout = layout;
         self.framebuffers = framebuffers;
-        self.command_buffers = command_buffers;
     }
 
     fn create_render_pass(
@@ -829,6 +824,26 @@ impl RenderInstance<'_,> {
         (pipeline, layout,)
     }
 
+    fn create_descriptor_set_layout(
+        device: &Device,
+        ubo_binding: vk::DescriptorSetLayoutBinding,
+    ) -> vk::DescriptorSetLayout
+    {
+        let sampler_binding = vk::DescriptorSetLayoutBinding::builder()
+            .binding(1,)
+            .descriptor_count(1,)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER,)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT,)
+            .build();
+        let bindings = [ubo_binding, sampler_binding,];
+
+        let layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&bindings,)
+            .build();
+
+        unsafe { device.create_descriptor_set_layout(&layout_info, None,).unwrap() }
+    }
+
     fn create_and_register_command_buffers(
         device: &Device,
         pool: vk::CommandPool,
@@ -968,10 +983,11 @@ impl RenderInstance<'_,> {
             CStr::from_ptr(props.device_name.as_ptr(),)
         });
 
-        let (graphics, present,) = Self::find_queue_families(instance, surface, surface_khr, device,);
+        let (graphics, present, transfer,) = Self::find_queue_families(instance, surface, surface_khr, device,);
         let queue_families_indices = QueueFamiliesIndices {
             graphics_index: graphics.unwrap(),
             present_index:  present.unwrap(),
+            transfer_index: transfer.unwrap(),
         };
 
         (device, queue_families_indices,)
@@ -984,7 +1000,7 @@ impl RenderInstance<'_,> {
         device: vk::PhysicalDevice,
     ) -> bool
     {
-        let (graphics, present,) = Self::find_queue_families(instance, surface, surface_khr, device,);
+        let (graphics, present, transfer,) = Self::find_queue_families(instance, surface, surface_khr, device,);
         let extention_support = Self::check_device_extension_support(instance, device,);
         let is_swapchain_adequate = {
             let details = SwapchainSupportDetails::new(device, surface, surface_khr,);
@@ -1009,12 +1025,17 @@ impl RenderInstance<'_,> {
         surface: &Surface,
         surface_khr: vk::SurfaceKHR,
         device: vk::PhysicalDevice,
-    ) -> (Option<u32,>, Option<u32,>,)
+    ) -> (Option<u32,>, Option<u32,>, Option<u32,>,)
     {
+        // TODO unhardcode this
         let mut graphics = None;
         let mut present = None;
-        let mut compute = None;
+        // let mut compute = None;
         let mut transfer = None;
+
+        // Queue 0 with queue a count of 16 has: graphics, present, compute, transfer, SPARSE_BINDING,
+        // Queue 1 with queue a count of 2 has: transfer, SPARSE_BINDING,
+        // Queue 2 with queue a count of 8 has: present, compute, transfer, SPARSE_BINDING,
 
         let props = unsafe { instance.get_physical_device_queue_family_properties(device,) };
         for (index, family,) in props.iter().filter(|f| f.queue_count > 0,).enumerate() {
@@ -1022,9 +1043,11 @@ impl RenderInstance<'_,> {
 
             print!("Queue {} with queue a count of {} has: ", index, family.queue_count);
 
-            if family.queue_flags.contains(vk::QueueFlags::GRAPHICS,) && graphics.is_none() {
+            if family.queue_flags.contains(vk::QueueFlags::GRAPHICS,) {
                 print!("graphics, ");
-                graphics = Some(index,);
+                if graphics.is_none() {
+                    graphics = Some(index,);
+                }
             }
 
             let present_support = unsafe {
@@ -1032,19 +1055,35 @@ impl RenderInstance<'_,> {
                     .get_physical_device_surface_support(device, index, surface_khr,)
                     .unwrap()
             };
-            if present_support && present.is_none() {
+            if present_support {
                 print!("present, ");
-                present = Some(index,);
+                if present.is_none() {
+                    present = Some(index,);
+                }
             }
 
-            if family.queue_flags.contains(vk::QueueFlags::COMPUTE,) && compute.is_none() {
+            if family.queue_flags.contains(vk::QueueFlags::COMPUTE,) {
                 print!("compute, ");
-                compute = Some(index,);
+                // compute = Some(index,);
             }
 
-            if family.queue_flags.contains(vk::QueueFlags::TRANSFER,) && compute.is_none() {
+            if family.queue_flags.contains(vk::QueueFlags::TRANSFER,) {
                 print!("transfer, ");
-                transfer = Some(index,);
+                if index == 1 {
+                    transfer = Some(index,);
+                }
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::RESERVED_5_KHR,) {
+                print!("RESERVED_5_KHR, ");
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::RESERVED_6_KHR,) {
+                print!("RESERVED_6_KHR, ");
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING,) {
+                print!("SPARSE_BINDING, ");
             }
 
             println!("");
@@ -1054,7 +1093,21 @@ impl RenderInstance<'_,> {
             // }
         }
 
-        (graphics, present,)
+        (graphics, present, transfer,)
+    }
+
+    fn create_command_pool(
+        device: &Device,
+        queue_families_indices: QueueFamiliesIndices,
+        create_flags: vk::CommandPoolCreateFlags,
+    ) -> vk::CommandPool
+    {
+        let command_pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(queue_families_indices.graphics_index,)
+            .flags(create_flags,)
+            .build();
+
+        unsafe { device.create_command_pool(&command_pool_info, None,).unwrap() }
     }
 
     fn check_device_extension_support(instance: &Instance, device: vk::PhysicalDevice,) -> bool {
@@ -1086,17 +1139,18 @@ impl RenderInstance<'_,> {
         instance: &Instance,
         device: vk::PhysicalDevice,
         queue_families_indices: QueueFamiliesIndices,
-    ) -> (Device, vk::Queue, vk::Queue,)
+    ) -> (Device, vk::Queue, vk::Queue, vk::Queue,)
     {
         let graphics_family_index = queue_families_indices.graphics_index;
         let present_family_index = queue_families_indices.present_index;
+        let transfer_family_index = queue_families_indices.transfer_index;
         let queue_priorities = [1.0f32,];
 
         let queue_create_infos = {
             // Vulkan specs does not allow passing an array containing duplicated family indices.
             // And since the family for graphics and presentation could be the same we need to
             // deduplicate it.
-            let mut indices = vec![graphics_family_index, present_family_index];
+            let mut indices = vec![graphics_family_index, present_family_index, transfer_family_index];
             indices.dedup();
 
             // Now we build an array of `DeviceQueueCreateInfo`.
@@ -1136,8 +1190,9 @@ impl RenderInstance<'_,> {
         };
         let graphics_queue = unsafe { device.get_device_queue(graphics_family_index, 0,) };
         let present_queue = unsafe { device.get_device_queue(present_family_index, 0,) };
+        let transfer_queue = unsafe { device.get_device_queue(transfer_family_index, 0,) };
 
-        (device, graphics_queue, present_queue,)
+        (device, graphics_queue, present_queue, transfer_queue,)
     }
 
     fn get_required_device_extensions() -> [&'static CStr; 1] {

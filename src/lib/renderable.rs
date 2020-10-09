@@ -14,10 +14,27 @@ pub struct Renderable {
     index_buffer:      Buffer,
     //
     asset_path:        String,
+    // command_buffers:   Vec<vk::CommandBuffer,>,
 }
 
 impl Renderable {
     pub fn update(transform: &Matrix4<f32,>,) {
         // fjjf
+    }
+
+    pub fn rebuild() {
+        // let command_buffers = Self::create_and_register_command_buffers(
+        //     device,
+        //     self.command_pool,
+        //     &self.framebuffers,
+        //     render_pass,
+        //     swapchainWrapper.properties,
+        //     self.vertex_buffer,
+        //     self.index_buffer,
+        //     self.model_index_count,
+        //     layout,
+        //     &self.descriptor_sets,
+        //     pipeline,
+        // );
     }
 }

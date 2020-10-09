@@ -39,7 +39,7 @@ impl Texture {
         vk_context: &VkContext,
         command_pool: vk::CommandPool,
         copy_queue: vk::Queue,
-        file_name: &str,
+        file_name: String,
     ) -> Texture
     {
         let cursor = fs::load(file_name,);

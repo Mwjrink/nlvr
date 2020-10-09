@@ -20,7 +20,6 @@ use std::{ffi::{CStr, CString},
           mem::{align_of, size_of}};
 use winit::window::Window;
 
-// grab this from the debug file I guess, or make it so the debug file is only loaded when this is true
 const MAX_FRAMES_IN_FLIGHT: u32 = 3;
 
 // VkContext
@@ -324,6 +323,7 @@ impl VulkanApp {
         let queue_families_indices = QueueFamiliesIndices {
             graphics_index: graphics.unwrap(),
             present_index:  present.unwrap(),
+            transfer_index: 0,
         };
 
         (device, queue_families_indices,)
@@ -388,13 +388,24 @@ impl VulkanApp {
     {
         let mut graphics = None;
         let mut present = None;
+        // let mut compute = None;
+        // let mut transfer = None;
+
+        // Queue 0 with queue a count of 16 has: graphics, present, compute, transfer, SPARSE_BINDING,
+        // Queue 1 with queue a count of 2 has: transfer, SPARSE_BINDING,
+        // Queue 2 with queue a count of 8 has: present, compute, transfer, SPARSE_BINDING,
 
         let props = unsafe { instance.get_physical_device_queue_family_properties(device,) };
         for (index, family,) in props.iter().filter(|f| f.queue_count > 0,).enumerate() {
             let index = index as u32;
 
-            if family.queue_flags.contains(vk::QueueFlags::GRAPHICS,) && graphics.is_none() {
-                graphics = Some(index,);
+            print!("Queue {} with queue a count of {} has: ", index, family.queue_count);
+
+            if family.queue_flags.contains(vk::QueueFlags::GRAPHICS,) {
+                print!("graphics, ");
+                if graphics.is_none() {
+                    graphics = Some(index,);
+                }
             }
 
             let present_support = unsafe {
@@ -402,13 +413,40 @@ impl VulkanApp {
                     .get_physical_device_surface_support(device, index, surface_khr,)
                     .unwrap()
             };
-            if present_support && present.is_none() {
-                present = Some(index,);
+            if present_support {
+                print!("present, ");
+                if present.is_none() {
+                    present = Some(index,);
+                }
             }
 
-            if graphics.is_some() && present.is_some() {
-                break;
+            if family.queue_flags.contains(vk::QueueFlags::COMPUTE,) {
+                print!("compute, ");
+                // compute = Some(index,);
             }
+
+            if family.queue_flags.contains(vk::QueueFlags::TRANSFER,) {
+                print!("transfer, ");
+                // transfer = Some(index,);
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::RESERVED_5_KHR,) {
+                print!("RESERVED_5_KHR, ");
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::RESERVED_6_KHR,) {
+                print!("RESERVED_6_KHR, ");
+            }
+
+            if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING,) {
+                print!("SPARSE_BINDING, ");
+            }
+
+            println!("");
+
+            // if graphics.is_some() && present.is_some() {
+            //     break;
+            // }
         }
 
         (graphics, present,)

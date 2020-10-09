@@ -1,11 +1,5 @@
-use super::{buffer::*, context::*, fs, image::*, queuefamilyindices::*, vulkan::*};
-use ash::{extensions::{ext::DebugReport,
-                       khr::{Surface, Swapchain}},
-          version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
-          vk,
-          Device,
-          Entry,
-          Instance};
+use super::swapchainproperties::*;
+use ash::{extensions::khr::Surface, vk};
 
 pub struct SwapchainSupportDetails {
     pub capabilities:  vk::SurfaceCapabilitiesKHR,

@@ -2,19 +2,19 @@ use super::syncobjects::*;
 use ash::Device;
 
 pub struct InFlightFrames {
-    sync_objects:  Vec<SyncObjects,>,
-    current_frame: usize,
+    pub sync_objects:  Vec<SyncObjects,>,
+    pub current_frame: usize,
 }
 
 impl InFlightFrames {
-    fn new(sync_objects: Vec<SyncObjects,>,) -> Self {
+    pub fn new(sync_objects: Vec<SyncObjects,>,) -> Self {
         Self {
             sync_objects,
             current_frame: 0,
         }
     }
 
-    fn destroy(&self, device: &Device,) {
+    pub fn destroy(&self, device: &Device,) {
         self.sync_objects.iter().for_each(|o| o.destroy(&device,),);
     }
 }

@@ -1,12 +1,5 @@
-use ash::{extensions::{ext::DebugReport,
-                       khr::{Surface, Swapchain}},
-          version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
-          vk,
-          Device,
-          Entry,
-          Instance};
-use std::{ffi::{CStr, CString},
-          mem::{align_of, size_of}};
+use ash::vk;
+use std::mem::size_of;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]

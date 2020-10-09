@@ -115,7 +115,7 @@ impl SwapchainWrapper {
                 memory: vk::DeviceMemory::null(),
                 view:   None,
             },)
-            .collect();
+            .collect::<Vec<Image,>>();
 
         let device = vk_context.device();
 
