@@ -10,8 +10,8 @@ pub struct Renderable {
     descriptor_sets:   Vec<vk::DescriptorSet,>,
     //
     uniform_buffers:   Vec<Buffer,>,
-    vertex_buffer:     Buffer,
-    index_buffer:      Buffer,
+    vertex_buffer_ptr: buff_ptr,
+    index_buffer_ptr:  buff_ptr,
     //
     asset_path:        String,
     // command_buffers:   Vec<vk::CommandBuffer,>,

@@ -1,16 +1,12 @@
-use super::{context::*, vulkan::*};
+use super::{buffer::*, context::*, vulkan::*};
 use ash::{version::DeviceV1_0, vk, Device};
 use std::mem::{align_of, size_of};
 
-pub struct BuffPtr {
-    pub offset: usize,
-    pub size:   usize,
-}
-
-pub struct Buffer {
+pub struct BufferAlloc {
     pub buffer: vk::Buffer,
     pub memory: vk::DeviceMemory,
     pub size:   vk::DeviceSize,
+    pub allocs: Vec<BuffPtr,>,
     /* VkDevice device;
      * VkBuffer buffer = VK_NULL_HANDLE;
      * VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -34,7 +30,7 @@ pub struct Buffer {
      */
 }
 
-impl Buffer {
+impl BufferAlloc {
     /// Create a buffer and allocate its memory.
     ///
     /// # Returns
@@ -46,7 +42,7 @@ impl Buffer {
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         mem_properties: vk::MemoryPropertyFlags,
-    ) -> Buffer
+    ) -> BufferAlloc
     {
         let device = vk_context.device();
         let buffer = {
@@ -75,6 +71,14 @@ impl Buffer {
             buffer,
             memory,
             size: mem_requirements.size,
+        }
+    }
+
+    pub fn as_buffer(&self,) -> Buffer {
+        Buffer {
+            buffer: self.buffer,
+            memory: self.memory,
+            size:   self.size,
         }
     }
 
@@ -116,7 +120,7 @@ impl Buffer {
         transfer_queue: vk::Queue,
         usage: vk::BufferUsageFlags,
         data: &[T],
-    ) -> Buffer
+    ) -> BufferAlloc
     {
         let device = vk_context.device();
         let size = (data.len() * size_of::<T,>()) as vk::DeviceSize;

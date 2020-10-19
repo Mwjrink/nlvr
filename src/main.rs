@@ -3,6 +3,8 @@ use nlvr::lib::{camera::*, context::*, debug::*, fs, math, swapchain::*, texture
 // use winit::monitor::VideoMode;
 // use winit::window::Fullscreen::Exclusive;
 extern crate log;
+extern crate vk_mem;
+
 use simple_logger::SimpleLogger;
 
 use winit::{event::{ElementState, Event, MouseButton, MouseScrollDelta, WindowEvent},

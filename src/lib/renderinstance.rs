@@ -57,11 +57,13 @@ pub struct RenderInstance {
     // ...
     // make these two Option<vk::Queue> and then use them if they exist but fall back on graphics queue
     transfer_queue:         vk::Queue,
-    /* this is the master pool, the command buffers are run on this and they consist of many models, vertices,
-     * indices and texture index for a texture array
-     * model_index_count:      usize,
-     * vertex_buffer:          Buffer,
-     * index_buffer:           Buffer, */
+    // this is the master pool, the command buffers are run on this and they consist of many models, vertices, indices
+    // and texture index for a texture array
+    // model_index_count:      usize,
+    vertex_buffer:          Buffer,
+    // vertex_size:            usize,
+    index_buffer:           Buffer,
+    // index_size:             usize,
 }
 
 impl RenderInstance {
@@ -79,6 +81,10 @@ impl RenderInstance {
         let debug_report_callback = setup_debug_messenger(&entry, &instance,);
 
         let (physical_device, queue_families_indices,) = Self::pick_physical_device(&instance, &surface, surface_khr,);
+
+        let test = unsafe { instance.get_physical_device_memory_properties(physical_device,) };
+
+        println!("test: {:?}", test);
 
         // move to a queue class potentially
         let (device, graphics_queue, present_queue, transfer_queue,) =
@@ -174,6 +180,16 @@ impl RenderInstance {
             present_queue,
             transfer_queue,
             depth_format,
+            vertex_buffer: Buffer {
+                buffer: vk::Buffer::null(),
+                memory: vk::DeviceMemory::null(),
+                size:   0,
+            },
+            index_buffer: Buffer {
+                buffer: vk::Buffer::null(),
+                memory: vk::DeviceMemory::null(),
+                size:   0,
+            },
         }
     }
 
@@ -210,6 +226,12 @@ impl RenderInstance {
             texture,
         );
 
+        // model_index_count:      usize,
+        // vertex_buffer:          Buffer,
+        // vertex_size:            usize,
+        // index_buffer:           Buffer,
+        // index_size:             usize,
+
         // add to overall vertex buffers and overall index count/buffers?
         let vertex_buffer = Self::create_vertex_buffer(
             &self.vk_context,
@@ -232,8 +254,8 @@ impl RenderInstance {
             descriptor_pool,
             descriptor_sets,
             uniform_buffers,
-            vertex_buffer,
-            index_buffer,
+            vertex_buffer_ptr,
+            index_buffer_ptr,
             //
             asset_path,
             // command_buffers,

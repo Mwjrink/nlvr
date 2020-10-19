@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ash = "0.31"
+vk-mem = "0.2.2"
 winit = "0.22"
 cgmath = "0.17"
 ash-window = "0.5"
