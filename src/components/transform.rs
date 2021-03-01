@@ -1,6 +1,8 @@
-use cgmath;
+use glam;
 
-pub type Transform = cgmath::Decomposed<cgmath::Vector3<f32,>, cgmath::Quaternion,>;
+pub struct Transform {
+    //  glam::Vector3<f32,>, glam::Quat,
+}
 
 impl Component for Transform {
     //

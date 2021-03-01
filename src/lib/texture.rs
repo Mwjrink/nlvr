@@ -1,4 +1,4 @@
-use super::{buffer::*, context::*, fs, image::*, swapchainproperties::*, vulkan::*};
+use super::{buffer::*, context::*, fs, image::*, utils::*, swapchainproperties::*, };//vulkan::*};
 use ash::{version::{DeviceV1_0, InstanceV1_0},
           vk,
           Device};
@@ -72,7 +72,7 @@ impl Texture {
             device.unmap_memory(buffer.memory,);
         }
 
-        let image = Image::create_image(
+        let mut image = Image::create_image(
             vk_context,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
             extent,
@@ -96,7 +96,7 @@ impl Texture {
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             );
 
-            Image::copy_from_buffer(device, command_pool, copy_queue, buffer, image, extent,);
+            Image::copy_from_buffer(device, command_pool, copy_queue, &buffer, image, extent,);
             // Self::copy_buffer_to_image(device, command_pool, copy_queue, bufferMagic, image, extent,);
 
             Self::generate_mipmaps(
@@ -311,7 +311,7 @@ impl Texture {
     ) -> Self
     {
         let format = swapchain_properties.format.format;
-        let image = Image::create_image(
+        let mut image = Image::create_image(
             vk_context,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
             swapchain_properties.extent,
@@ -353,7 +353,7 @@ impl Texture {
         msaa_samples: vk::SampleCountFlags,
     ) -> Texture
     {
-        let image = Image::create_image(
+        let mut image = Image::create_image(
             vk_context,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
             extent,

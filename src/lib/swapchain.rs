@@ -108,7 +108,7 @@ impl SwapchainWrapper {
         let swapchain_khr = unsafe { swapchain.create_swapchain(&create_info, None,).unwrap() };
         let vkImages = unsafe { swapchain.get_swapchain_images(swapchain_khr,).unwrap() };
 
-        let images = vkImages
+        let mut images = vkImages
             .iter()
             .map(|vkImage| Image {
                 image:  *vkImage,
@@ -119,9 +119,9 @@ impl SwapchainWrapper {
 
         let device = vk_context.device();
 
-        images.iter().for_each(|image| unsafe {
-            image.create_image_view(device, 1, properties.format.format, vk::ImageAspectFlags::COLOR,)
-        },);
+        for image in &mut images {
+            image.create_image_view(device, 1, properties.format.format, vk::ImageAspectFlags::COLOR,);
+        }
 
         let color_texture =
             Texture::create_color_texture(&vk_context, command_pool, transition_queue, properties, msaa_samples,);

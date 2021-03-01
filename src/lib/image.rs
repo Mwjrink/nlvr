@@ -1,4 +1,4 @@
-use super::{buffer::*, context::*, vulkan::*};
+use super::{buffer::*, context::*, utils::*};//, vulkan::*};
 use ash::{version::DeviceV1_0, vk, Device};
 
 #[derive(Clone, Copy)]
@@ -50,7 +50,7 @@ impl Image {
         let device = vk_context.device();
         let image = unsafe { device.create_image(&image_info, None,).unwrap() };
         let mem_requirements = unsafe { device.get_image_memory_requirements(image,) };
-        let mem_type_index = find_memory_type(mem_requirements, vk_context.get_mem_properties(), mem_properties,);
+        let mem_type_index = Buffer::find_memory_type(mem_requirements, vk_context.get_mem_properties(), mem_properties,);
 
         let alloc_info = vk::MemoryAllocateInfo::builder()
             .allocation_size(mem_requirements.size,)
@@ -184,7 +184,7 @@ impl Image {
         device: &Device,
         command_pool: vk::CommandPool,
         transition_queue: vk::Queue,
-        buffer: Buffer,
+        buffer: &Buffer,
         image: Image,
         extent: vk::Extent2D,
     )

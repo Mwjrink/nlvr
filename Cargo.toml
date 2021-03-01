@@ -18,13 +18,18 @@ path = "src/lib.rs"
 [dependencies]
 ash = "0.31"
 vk-mem = "0.2.2"
-winit = "0.22"
-cgmath = "0.17"
+winit = "0.24.0"
+
+cgmath = "0.18.0"
+glam = "0.12.0"
+
 ash-window = "0.5"
 log = "0.4.11"
 simple_logger = "1.9.0"
 image = "0.23.9"
 tobj = "2.0.2"
+
+galloc = { path = "../galloc" } # { git = "https://github.com/mwjrink/galloc", branch = "main" }
 
 # cgmath = "0.17"
 # image = "0.23"

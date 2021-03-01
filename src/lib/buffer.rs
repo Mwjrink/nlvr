@@ -1,10 +1,11 @@
-use super::{context::*, vulkan::*};
+use super::context::*;
 use ash::{version::DeviceV1_0, vk, Device};
 use std::mem::{align_of, size_of};
+use super::utils::*;
 
 pub struct BuffPtr {
-    pub offset: usize,
-    pub size:   usize,
+    pub offset: u64,
+    pub size:   vk::DeviceSize,
 }
 
 pub struct Buffer {
@@ -60,7 +61,7 @@ impl Buffer {
 
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer,) };
         let memory = {
-            let mem_type = find_memory_type(mem_requirements, vk_context.get_mem_properties(), mem_properties,);
+            let mem_type = Self::find_memory_type(mem_requirements, vk_context.get_mem_properties(), mem_properties,);
 
             let alloc_info = vk::MemoryAllocateInfo::builder()
                 .allocation_size(mem_requirements.size,)
@@ -78,6 +79,30 @@ impl Buffer {
         }
     }
 
+    /// Find a memory type in `mem_properties` that is suitable
+    /// for `requirements` and supports `required_properties`.
+    ///
+    /// # Returns
+    ///
+    /// The index of the memory type from `mem_properties`.
+    pub fn find_memory_type(
+        requirements: vk::MemoryRequirements,
+        mem_properties: vk::PhysicalDeviceMemoryProperties,
+        required_properties: vk::MemoryPropertyFlags,
+    ) -> u32
+    {
+        for i in 0..mem_properties.memory_type_count {
+            if requirements.memory_type_bits & (1 << i) != 0 &&
+                mem_properties.memory_types[i as usize]
+                    .property_flags
+                    .contains(required_properties,)
+            {
+                return i;
+            }
+        }
+        panic!("Failed to find suitable memory type.")
+    }
+
     /// Copy the `size` first bytes of `src` into `dst`.
     ///
     /// It's done using a command buffer allocated from
@@ -90,12 +115,13 @@ impl Buffer {
         src: vk::Buffer,
         dst: vk::Buffer,
         size: vk::DeviceSize,
+        dst_offset: u64,
     )
     {
         execute_one_time_commands(&device, command_pool, transfer_queue, |buffer| {
             let region = vk::BufferCopy {
                 src_offset: 0,
-                dst_offset: 0,
+                dst_offset,
                 size,
             };
             let regions = [region,];
@@ -154,6 +180,7 @@ impl Buffer {
             staging_buffer,
             buffer.buffer,
             buffer.size,
+            0,
         );
 
         unsafe {
@@ -162,5 +189,84 @@ impl Buffer {
         };
 
         buffer
+    }
+
+    pub fn create_device_local_buffer(
+        vk_context: &VkContext,
+        command_pool: vk::CommandPool,
+        transfer_queue: vk::Queue,
+        usage: vk::BufferUsageFlags,
+        size: vk::DeviceSize,
+    ) -> Buffer
+    {
+        let device = vk_context.device();
+
+        let buffer = Self::create_buffer(
+            vk_context,
+            size,
+            vk::BufferUsageFlags::TRANSFER_DST | usage,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        );
+
+        buffer
+    }
+
+    pub fn transfer_to_device_local_buffer<A, T: Copy,>(
+        vk_context: &VkContext,
+        command_pool: vk::CommandPool,
+        transfer_queue: vk::Queue,
+        buffer: &Buffer,
+        data: &[T],
+        buffer_offset: u64,
+    ) -> vk::DeviceSize
+    {
+        let device = vk_context.device();
+        let size = (data.len() * size_of::<T,>()) as vk::DeviceSize;
+        let Buffer {
+            buffer: staging_buffer,
+            memory: staging_memory,
+            size: staging_mem_size,
+        } = Self::create_buffer(
+            vk_context,
+            size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        );
+
+        unsafe {
+            let data_ptr = device
+                .map_memory(staging_memory, 0, size, vk::MemoryMapFlags::empty(),)
+                .unwrap();
+            let mut align = ash::util::Align::new(data_ptr, align_of::<A,>() as _, staging_mem_size,);
+            align.copy_from_slice(data,);
+            device.unmap_memory(staging_memory,);
+        };
+
+        Self::copy_buffer(
+            device,
+            command_pool,
+            transfer_queue,
+            staging_buffer,
+            buffer.buffer,
+            size,
+            buffer_offset,
+        );
+
+        unsafe {
+            device.destroy_buffer(staging_buffer, None,);
+            device.free_memory(staging_memory, None,);
+        };
+
+        size
+    }
+
+    fn cleanup(&mut self, vk_context: &VkContext,) {
+        log::debug!("Dropping buffer.");
+
+        let device = vk_context.device();
+        unsafe {
+            device.free_memory(self.memory, None,);
+            device.destroy_buffer(self.buffer, None,);
+        }
     }
 }

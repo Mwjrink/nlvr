@@ -67,10 +67,16 @@ impl BufferAlloc {
 
         unsafe { device.bind_buffer_memory(buffer, memory, 0,).unwrap() };
 
+        let ptr = BuffPtr {
+            offset: 0,
+            size,
+        };
+
         Buffer {
             buffer,
             memory,
             size: mem_requirements.size,
+            allocs: vec![ptr],
         }
     }
 
