@@ -145,7 +145,7 @@ impl SwapchainWrapper {
         }
     }
 
-    /// Clean up the swapchain and all resources that depends on it.
+    /// Clean up the swapchain and all resources that depend on it.
     pub fn cleanup(&mut self, device: &Device,) {
         unsafe {
             self.depth_texture.destroy(device,);

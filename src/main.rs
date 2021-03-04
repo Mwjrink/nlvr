@@ -39,10 +39,11 @@ fn main() {
     // let mut app = VulkanApp::new(&window,);
 
     let mut render_instance = RenderInstance::<CameraUBO>::create(&window);
-    let mut cottage_renderable = render_instance.renderable_from_file("models/chalet.obj".to_string(), None);
+    // let mut cottage_renderable =
+    render_instance.renderable_from_file("models/chalet.obj".to_string(), None);
 
-    let transform = Matrix4::from_scale(1.0);
-    let cottage_renderable_instance = cottage_renderable.create_instance(transform);
+    // let transform = Matrix4::from_scale(1.0);
+    // let cottage_renderable_instance = cottage_renderable.create_instance(transform);
 
     let mut camera = Camera::default();
 
@@ -71,9 +72,9 @@ fn main() {
             Event::NewEvents(_) => {
                 // reset input states on new frame
                 {
-                    is_left_clicked = false;
-                    cursor_position = [0, 0];
+                    // is_left_clicked = false;
                     last_position = cursor_position;
+                    // cursor_position = [0, 0];
                     wheel_delta = 0.0;
                 }
                 // frame timing info
@@ -175,10 +176,11 @@ fn main() {
                     state,
                     ..
                 } => {
+                    if state == ElementState::Released {
+                        is_left_clicked = false;
+                    }
                     if state == ElementState::Pressed {
                         is_left_clicked = true;
-                    } else {
-                        is_left_clicked = false;
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {

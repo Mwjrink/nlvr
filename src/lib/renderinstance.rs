@@ -286,7 +286,9 @@ impl<T: UBO + Copy> RenderInstance<T> {
     */
 
     // TODO texture should not be optional, in theory
-    pub fn renderable_from_file(&mut self, model_path: String, texture_path: Option<String>) -> Renderable {
+    pub fn renderable_from_file(&mut self, model_path: String, texture_path: Option<String>) {
+        //-> Renderable {
+        // TODO should this be returning?
         // if let Some(tex_path) = texture_path {
         //     let texture =
         //         Texture::create_texture_image(&self.vk_context, self.command_pool, self.graphics_queue, tex_path);
@@ -370,7 +372,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         // self.vertex_buffer.add some shit to it
 
-        Renderable {
+        let result = Renderable {
             model_index_count: indices.len(),
             // texture,
             // descriptor_pool,
@@ -382,7 +384,9 @@ impl<T: UBO + Copy> RenderInstance<T> {
             asset_path: model_path,
             // command_buffers,
             instances: Vec::new(),
-        }
+        };
+
+        self.renderables.push(result);
     }
 
     fn create_sync_objects(device: &Device) -> InFlightFrames {
@@ -716,8 +720,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             swapchain_wrapper.properties,
             self.vertex_buffer.buffer,
             self.index_buffer.buffer,
-            &self.renderables,
-            self.renderables.iter().map(|element| element.instances.len()).sum(),
+            self.renderables[0].model_index_count, // TODO make this dynamic
             layout,
             &self.descriptor_sets,
             pipeline,
@@ -1000,7 +1003,6 @@ impl<T: UBO + Copy> RenderInstance<T> {
         swapchain_properties: SwapchainProperties,
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
-        renderables: &[Renderable],
         index_count: usize,
         pipeline_layout: vk::PipelineLayout,
         descriptor_sets: &[vk::DescriptorSet],
