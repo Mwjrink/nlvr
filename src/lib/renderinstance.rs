@@ -1,11 +1,9 @@
 use super::{
     buffer::*,
-    camera::Camera,
     context::*,
     debug::*,
     fs,
     inflightframedata::*,
-    math,
     queuefamilyindices::*,
     renderable::*,
     shaders::*,
@@ -23,11 +21,12 @@ use ash::{
         ext::DebugReport,
         khr::{Surface, Swapchain},
     },
+    util::Align,
     version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
     vk::{self, CommandBuffer},
     Device, Entry, Instance,
 };
-use cgmath::{vec3, Deg, Matrix4, Point3, Vector3};
+use cgmath::{vec3, Deg, Matrix4};
 use galloc::{Galloc, MemoryBlock};
 use std::{
     ffi::{CStr, CString},
@@ -38,10 +37,10 @@ use winit::window::Window;
 const MAX_FRAMES_IN_FLIGHT: u32 = 3;
 const PAGE_SIZE: u64 = 2147483648; // 4294967296
 
-pub struct RenderInstance {
+pub struct RenderInstance<T: UBO + Copy> {
     vk_context: VkContext,
     //
-    swapchain: SwapchainWrapper,
+    pub swapchain: SwapchainWrapper,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
@@ -56,11 +55,10 @@ pub struct RenderInstance {
     // this is here because it depends on the renderpass
     framebuffers: Vec<vk::Framebuffer>,
     // TODO: this will be known at compile time when this is all finalized so make this an array eventually
+    // TODO: maybe make this a generic parameter
     vertex_attribute_descs: Vec<vk::VertexInputAttributeDescription>,
     vertex_binding_descs: vk::VertexInputBindingDescription,
-    // descriptor_pool:        vk::DescriptorPool,
-    // descriptor_sets:        Vec<vk::DescriptorSet,>,
-    // ...
+
     // make these two Option<vk::Queue> and then use them if they exist but fall back on graphics queue
     transfer_queue: vk::Queue,
 
@@ -68,10 +66,10 @@ pub struct RenderInstance {
     // and texture index for a texture array
     // model_index_count:      usize,
     vertex_buffer: Buffer,
-    vertex_alloc: Galloc,
+    vertex_alloc: Galloc, // TODO: use VMA when it implements buffer sub allocation
 
     index_buffer: Buffer,
-    index_alloc: Galloc,
+    index_alloc: Galloc, // TODO: use VMA when it implements buffer sub allocation
 
     renderables: Vec<Renderable>,
 
@@ -80,14 +78,16 @@ pub struct RenderInstance {
 
     command_buffers: Vec<CommandBuffer>, // TODO should this be here?
 
-    // TODO temporary
-    camera: Camera,
     // TODO should this go here?
     global_uniform_buffers: Vec<Buffer>,
+
+    uniform_buffers_align: [Align<T>; MAX_FRAMES_IN_FLIGHT as usize],
+
+    ubo_data: Option<T>,
 }
 
-impl RenderInstance {
-    pub fn create(window: &Window) -> RenderInstance {
+impl<T: UBO + Copy> RenderInstance<T> {
+    pub fn create(window: &Window) -> RenderInstance<T> {
         log::debug!("Creating application.");
 
         let frames_in_flight = 3;
@@ -102,7 +102,7 @@ impl RenderInstance {
 
         let (physical_device, queue_families_indices) = Self::pick_physical_device(&instance, &surface, surface_khr);
 
-        let test = unsafe { instance.get_physical_device_memory_properties(physical_device) };
+        let test = unsafe { instance.get_physical_device_properties(physical_device) };
 
         println!("test: {:?}", test);
 
@@ -143,7 +143,7 @@ impl RenderInstance {
         let render_pass =
             Self::create_render_pass(vk_context.device(), swapchain.properties, msaa_samples, depth_format);
         let descriptor_set_layout =
-            Self::create_descriptor_set_layout(vk_context.device(), CameraUBO::get_descriptor_set_layout_binding());
+            Self::create_descriptor_set_layout(vk_context.device(), T::get_descriptor_set_layout_binding());
         let (pipeline, layout) = Self::create_pipeline(
             vk_context.device(),
             swapchain.properties,
@@ -179,12 +179,46 @@ impl RenderInstance {
 
         let global_uniform_buffers = Self::create_uniform_buffers(&vk_context, MAX_FRAMES_IN_FLIGHT as _);
 
+        let descriptor_pool = Self::create_descriptor_pool(vk_context.device(), MAX_FRAMES_IN_FLIGHT as _);
+        let descriptor_sets = Self::create_descriptor_sets(
+            vk_context.device(),
+            descriptor_pool,
+            descriptor_set_layout,
+            &global_uniform_buffers
+                .iter()
+                .map(|buff| buff.buffer)
+                .collect::<Vec<vk::Buffer>>(),
+            // texture, // global texture atlas
+        );
+
+        let size = size_of::<T>() as vk::DeviceSize;
+        let uniform_buffers_align = unsafe {
+            [
+                {
+                    let data_ptr = vk_context
+                        .device()
+                        .map_memory(global_uniform_buffers[0].memory, 0, size, vk::MemoryMapFlags::empty())
+                        .unwrap();
+                    ash::util::Align::new(data_ptr, align_of::<f32>() as _, size)
+                },
+                {
+                    let data_ptr = vk_context
+                        .device()
+                        .map_memory(global_uniform_buffers[1].memory, 0, size, vk::MemoryMapFlags::empty())
+                        .unwrap();
+                    ash::util::Align::new(data_ptr, align_of::<f32>() as _, size)
+                },
+                {
+                    let data_ptr = vk_context
+                        .device()
+                        .map_memory(global_uniform_buffers[2].memory, 0, size, vk::MemoryMapFlags::empty())
+                        .unwrap();
+                    ash::util::Align::new(data_ptr, align_of::<f32>() as _, size)
+                },
+            ]
+        };
+
         Self {
-            // camera: Default::default(),
-            // is_left_clicked: false,
-            // cursor_position: [0, 0,],
-            // cursor_delta: None,
-            // wheel_delta: None,
             vk_context,
             pipeline_layout: layout,
             pipeline,
@@ -217,14 +251,18 @@ impl RenderInstance {
             // TODO cull 0 size blocks in Galloc tree
             index_alloc: Galloc::new(0, None),
             renderables: Vec::new(),
-            descriptor_pool: vk::DescriptorPool::null(),
-            descriptor_sets: Vec::new(),
+
+            descriptor_pool,
+            descriptor_sets,
 
             command_buffers: Vec::new(),
 
-            camera: Default::default(),
-
+            // camera: Default::default(),
             global_uniform_buffers,
+
+            uniform_buffers_align,
+
+            ubo_data: None,
         }
     }
 
@@ -256,28 +294,14 @@ impl RenderInstance {
 
         let (vertices, indices) = Self::load_model(model_path.clone());
 
-        // TODO Descriptors
-        // let descriptor_pool = Self::create_descriptor_pool(self.vk_context.device(), MAX_FRAMES_IN_FLIGHT as _,);
-        // let descriptor_sets = Self::create_descriptor_sets(
-        //     self.vk_context.device(),
-        //     descriptor_pool,
-        //     self.descriptor_set_layout,
-        //     &uniform_buffers
-        //         .iter()
-        //         .map(|buff| buff.buffer,)
-        //         .collect::<Vec<vk::Buffer,>>(),
-        //     texture,
-        // );
-
         // vertex
         let vertex_buffer_ptr;
         {
             if self.vertex_buffer.size == 0 {
                 // add to overall vertex buffers and overall index count/buffers?
-                let vertexindex_buffer =
-                    Self::create_vertex_buffer(&self.vk_context, self.transient_command_pool, self.graphics_queue);
+                let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
 
-                self.vertex_buffer = vertexindex_buffer;
+                self.vertex_buffer = vertex_buffer;
                 self.vertex_alloc.free(MemoryBlock {
                     offset: 0,
                     size: PAGE_SIZE as usize,
@@ -292,7 +316,7 @@ impl RenderInstance {
             let vertices_size = Self::transfer_vertices(
                 &self.vk_context,
                 self.transient_command_pool,
-                self.graphics_queue,
+                self.transfer_queue,
                 &self.vertex_buffer,
                 &vertices,
                 vertex_block.offset as u64,
@@ -308,8 +332,7 @@ impl RenderInstance {
         {
             if self.index_buffer.size == 0 {
                 // add to overall vertex buffers and overall index count/buffers?
-                let index_buffer =
-                    Self::create_index_buffer(&self.vk_context, self.transient_command_pool, self.graphics_queue);
+                let index_buffer = Self::create_index_buffer(&self.vk_context);
 
                 self.index_buffer = index_buffer;
                 self.index_alloc.free(MemoryBlock {
@@ -326,7 +349,7 @@ impl RenderInstance {
             let indices_size = Self::transfer_indices(
                 &self.vk_context,
                 self.transient_command_pool,
-                self.graphics_queue,
+                self.transfer_queue,
                 &self.index_buffer,
                 &indices,
                 index_block.offset as u64,
@@ -431,28 +454,12 @@ impl RenderInstance {
         (vertices, mesh.indices.clone())
     }
 
-    fn create_vertex_buffer(
-        vk_context: &VkContext,
-        command_pool: vk::CommandPool,
-        transfer_queue: vk::Queue,
-    ) -> Buffer {
-        Buffer::create_device_local_buffer(
-            vk_context,
-            command_pool,
-            transfer_queue,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            PAGE_SIZE,
-        )
+    fn create_vertex_buffer(vk_context: &VkContext) -> Buffer {
+        Buffer::create_device_local_buffer(vk_context, vk::BufferUsageFlags::VERTEX_BUFFER, PAGE_SIZE)
     }
 
-    fn create_index_buffer(vk_context: &VkContext, command_pool: vk::CommandPool, transfer_queue: vk::Queue) -> Buffer {
-        Buffer::create_device_local_buffer(
-            vk_context,
-            command_pool,
-            transfer_queue,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            PAGE_SIZE,
-        )
+    fn create_index_buffer(vk_context: &VkContext) -> Buffer {
+        Buffer::create_device_local_buffer(vk_context, vk::BufferUsageFlags::INDEX_BUFFER, PAGE_SIZE)
     }
 
     fn transfer_vertices(
@@ -518,7 +525,7 @@ impl RenderInstance {
         pool: vk::DescriptorPool,
         layout: vk::DescriptorSetLayout,
         uniform_buffers: &[vk::Buffer],
-        texture: Texture,
+        // texture: Texture, // global texture atlas
     ) -> Vec<vk::DescriptorSet> {
         let layouts = (0..uniform_buffers.len()).map(|_| layout).collect::<Vec<_>>();
         let alloc_info = vk::DescriptorSetAllocateInfo::builder()
@@ -534,16 +541,16 @@ impl RenderInstance {
                 let buffer_info = vk::DescriptorBufferInfo::builder()
                     .buffer(*buffer)
                     .offset(0)
-                    .range(size_of::<CameraUBO>() as vk::DeviceSize)
+                    .range(size_of::<T>() as vk::DeviceSize)
                     .build();
                 let buffer_infos = [buffer_info];
 
-                let image_info = vk::DescriptorImageInfo::builder()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(texture.image.view.unwrap())
-                    .sampler(texture.sampler.unwrap())
-                    .build();
-                let image_infos = [image_info];
+                // let image_info = vk::DescriptorImageInfo::builder()
+                //     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                //     .image_view(texture.image.view.unwrap())
+                //     .sampler(texture.sampler.unwrap())
+                //     .build();
+                // let image_infos = [image_info];
 
                 let ubo_descriptor_write = vk::WriteDescriptorSet::builder()
                     .dst_set(*set)
@@ -552,15 +559,15 @@ impl RenderInstance {
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .buffer_info(&buffer_infos)
                     .build();
-                let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
-                    .dst_set(*set)
-                    .dst_binding(1)
-                    .dst_array_element(0)
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(&image_infos)
-                    .build();
+                // let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
+                //     .dst_set(*set)
+                //     .dst_binding(1)
+                //     .dst_array_element(0)
+                //     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                //     .image_info(&image_infos)
+                //     .build();
 
-                let descriptor_writes = [ubo_descriptor_write, sampler_descriptor_write];
+                let descriptor_writes = [ubo_descriptor_write]; //, sampler_descriptor_write];
 
                 unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) }
             });
@@ -569,7 +576,7 @@ impl RenderInstance {
     }
 
     fn create_uniform_buffers(vk_context: &VkContext, count: usize) -> Vec<Buffer> {
-        let size = size_of::<CameraUBO>() as vk::DeviceSize;
+        let size = size_of::<T>() as vk::DeviceSize;
         let mut buffers = Vec::new();
 
         for _ in 0..count {
@@ -646,6 +653,7 @@ impl RenderInstance {
         let device = self.vk_context.device();
 
         self.swapchain.cleanup(&device);
+        self.cleanup(device);
 
         let dimensions = [
             self.swapchain.properties.extent.width,
@@ -661,7 +669,12 @@ impl RenderInstance {
             self.depth_format,
         );
 
-        let render_pass = Self::create_render_pass(device, swapchain_wrapper.properties, self.msaa_samples, self.depth_format);
+        let render_pass = Self::create_render_pass(
+            device,
+            swapchain_wrapper.properties,
+            self.msaa_samples,
+            self.depth_format,
+        );
 
         let (pipeline, layout) = Self::create_pipeline(
             device,
@@ -671,22 +684,6 @@ impl RenderInstance {
             self.descriptor_set_layout,
             self.vertex_binding_descs,
             &self.vertex_attribute_descs,
-        );
-
-        // this needs to be rebuilt in the renderable objects?
-        let command_buffers = Self::create_and_register_command_buffers(
-            device,
-            self.command_pool,
-            &self.framebuffers,
-            render_pass,
-            swapchain_wrapper.properties,
-            self.vertex_buffer.buffer,
-            self.index_buffer.buffer,
-            &self.renderables,
-            self.renderables.iter().map(|element| element.instances.len()).sum(),
-            layout,
-            &self.descriptor_sets,
-            pipeline,
         );
 
         let framebuffers = swapchain_wrapper
@@ -710,9 +707,25 @@ impl RenderInstance {
             })
             .collect::<Vec<_>>();
 
+        // this needs to be rebuilt in the renderable objects?
+        let command_buffers = Self::create_and_register_command_buffers(
+            device,
+            self.command_pool,
+            &framebuffers,
+            render_pass,
+            swapchain_wrapper.properties,
+            self.vertex_buffer.buffer,
+            self.index_buffer.buffer,
+            &self.renderables,
+            self.renderables.iter().map(|element| element.instances.len()).sum(),
+            layout,
+            &self.descriptor_sets,
+            pipeline,
+        );
+
         self.swapchain = swapchain_wrapper;
         // self.swapchain_image_views = swapchain_image_views;
-        // self.render_pass = render_pass;
+        self.render_pass = render_pass;
         self.pipeline = pipeline;
         self.pipeline_layout = layout;
         self.framebuffers = framebuffers;
@@ -1003,7 +1016,7 @@ impl RenderInstance {
 
         buffers.iter().enumerate().for_each(|(i, buffer)| {
             let buffer = *buffer;
-            let framebuffer = &framebuffers[i];
+            let framebuffer = framebuffers[i];
 
             // begin command buffer
             {
@@ -1028,7 +1041,7 @@ impl RenderInstance {
                 ];
                 let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
                     .render_pass(render_pass)
-                    .framebuffer(*framebuffer)
+                    .framebuffer(framebuffer)
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D { x: 0, y: 0 },
                         extent: swapchain_properties.extent,
@@ -1153,11 +1166,11 @@ impl RenderInstance {
         surface_khr: vk::SurfaceKHR,
         device: vk::PhysicalDevice,
     ) -> (Option<u32>, Option<u32>, Option<u32>) {
-        // TODO unhardcode this
         let mut graphics = None;
         let mut present = None;
         // let mut compute = None;
         let mut transfer = None;
+        // compute queue or use graphics?
 
         // Queue 0 with queue a count of 16 has: graphics, present, compute, transfer, SPARSE_BINDING,
         // Queue 1 with queue a count of 2 has: transfer, SPARSE_BINDING,
@@ -1345,42 +1358,10 @@ impl RenderInstance {
         unsafe { device.cmd_draw_indexed(buffer, index_count as _, 1, 0, 0, 0) };
     }
 
-    // TODO this function should not exist, hardcoded camera and shit
-    fn update_uniform_buffers(&mut self, current_image: u32) {
-        // if self.is_left_clicked && self.cursor_delta.is_some() {
-        //     let delta = self.cursor_delta.take().unwrap();
-        //     let x_ratio = delta[0] as f32 / self.swapchain_properties.extent.width as f32;
-        //     let y_ratio = delta[1] as f32 / self.swapchain_properties.extent.height as f32;
-        //     let theta = x_ratio * 180.0_f32.to_radians();
-        //     let phi = y_ratio * 90.0_f32.to_radians();
-        //     self.camera.rotate(theta, phi,);
-        // }
-        // if let Some(wheel_delta,) = self.wheel_delta {
-        //     self.camera.forward(wheel_delta * 0.3,);
-        // }
-
-        let aspect = self.swapchain.properties.extent.width as f32 / self.swapchain.properties.extent.height as f32;
-        let ubo = CameraUBO {
-            view: Matrix4::look_at_rh(
-                self.camera.position(),
-                Point3::new(0.0, 0.0, 0.0),
-                Vector3::new(0.0, 1.0, 0.0),
-            ),
-            proj: math::perspective(Deg(45.0), aspect, 0.1, 10.0),
-        };
-        let ubos = [ubo];
-
-        let buffer_mem = self.global_uniform_buffers[current_image as usize].memory;
-        let size = size_of::<CameraUBO>() as vk::DeviceSize;
-        unsafe {
-            let device = self.vk_context.device();
-            let data_ptr = device
-                .map_memory(buffer_mem, 0, size, vk::MemoryMapFlags::empty())
-                .unwrap();
-            let mut align = ash::util::Align::new(data_ptr, align_of::<f32>() as _, size);
-            align.copy_from_slice(&ubos);
-            device.unmap_memory(buffer_mem);
-        }
+    // TODO allow any number of ubos to be passed?
+    // TODO make the memory for uniform buffers (stored align) a big buffer and reallocate if it is too small here:
+    pub fn update_uniform_buffers(&mut self, ubo: T) {
+        self.ubo_data = Some(ubo);
     }
 
     pub fn draw_frame(&mut self) -> bool {
@@ -1416,7 +1397,14 @@ impl RenderInstance {
 
         unsafe { self.vk_context.device().reset_fences(&wait_fences).unwrap() };
 
-        self.update_uniform_buffers(image_index);
+        if let Some(ubo) = self.ubo_data {
+            let ubos = [ubo];
+
+            // TODO use offsets?
+            // TODO this should be fine cause of memory fences in vulkan and shit but I can just flush to be safe here:
+            // device.flush_mapped_memory_ranges
+            self.uniform_buffers_align[image_index as usize].copy_from_slice(&ubos);
+        }
 
         let device = self.vk_context.device();
         let wait_semaphores = [image_available_semaphore];
@@ -1463,17 +1451,13 @@ impl RenderInstance {
                 _ => {}
             }
         }
-        // acquire swapchain image index and store it in hot
 
         false
     }
 
     /// Clean up the swapchain and all resources that depends on it.
-    fn cleanup(&mut self, device: &Device) {
+    fn cleanup(&self, device: &Device) {
         unsafe {
-            // self.depth_texture.destroy(device,);
-            // self.color_texture.destroy(device,);
-            self.swapchain.cleanup(device);
             self.framebuffers
                 .iter()
                 .for_each(|f| device.destroy_framebuffer(*f, None));
@@ -1481,14 +1465,38 @@ impl RenderInstance {
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.pipeline_layout, None);
             device.destroy_render_pass(self.render_pass, None);
-            // self.images
-            //     .iter()
-            //     .for_each(|v| device.destroy_image_view(v.view.unwrap(), None,),);
-            // self.swapchain.destroy_swapchain(self.swapchain_khr, None,);
         }
     }
 
     pub fn wait_gpu_idle(&self) {
         unsafe { self.vk_context.device().device_wait_idle().unwrap() };
+    }
+}
+
+impl<T: UBO + Copy> Drop for RenderInstance<T> {
+    fn drop(&mut self) {
+        log::debug!("Dropping application.");
+        let device = self.vk_context.device();
+
+        self.swapchain.cleanup(device);
+        self.cleanup(device);
+        self.in_flight_frames.destroy(device);
+        unsafe {
+            device.destroy_descriptor_pool(self.descriptor_pool, None);
+            device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+
+            for i in 0..MAX_FRAMES_IN_FLIGHT as usize {
+                device.unmap_memory(self.global_uniform_buffers[i].memory);
+                self.global_uniform_buffers[i].cleanup(&self.vk_context);
+            }
+
+            self.index_buffer.cleanup(&self.vk_context);
+            self.vertex_buffer.cleanup(&self.vk_context);
+            // self.texture.destroy(device,);
+            device.destroy_command_pool(self.transient_command_pool, None);
+            device.destroy_command_pool(self.command_pool, None);
+
+            device.destroy_device(None);
+        }
     }
 }

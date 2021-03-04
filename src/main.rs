@@ -1,5 +1,5 @@
 use cgmath::Matrix4;
-use nlvr::lib::renderinstance::*;
+use nlvr::lib::{camera::Camera, math, renderinstance::*, ubo::CameraUBO};
 
 // use winit::monitor::VideoMode;
 // use winit::window::Fullscreen::Exclusive;
@@ -13,6 +13,8 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+
+use cgmath::{Deg, Point3, Vector3};
 
 use std::time::Instant;
 
@@ -36,26 +38,31 @@ fn main() {
 
     // let mut app = VulkanApp::new(&window,);
 
-    let mut render_instance = RenderInstance::create(&window);
+    let mut render_instance = RenderInstance::<CameraUBO>::create(&window);
     let mut cottage_renderable = render_instance.renderable_from_file("models/chalet.obj".to_string(), None);
 
     let transform = Matrix4::from_scale(1.0);
     let cottage_renderable_instance = cottage_renderable.create_instance(transform);
 
+    let mut camera = Camera::default();
+
     // event_loop.available_monitors();
 
     let mut frames = vec![0.0; FRAMES_AVERAGE as usize];
     let mut frame_index = 0;
-    let mut avg = 0;
     let mut last = Instant::now();
+    let mut fps: f64 = 0.0;
 
     let mut dirty_swapchain = true;
 
     // Used to accumutate input events from the start to the end of a frame
-    let mut is_left_clicked = None;
-    let mut cursor_position = None;
-    // let mut last_position = app.cursor_position;
-    let mut wheel_delta = None;
+    let mut is_left_clicked = false;
+    let mut cursor_position: [i32; 2] = [0, 0];
+    let mut last_position: [i32; 2] = cursor_position;
+    let mut wheel_delta: f32 = 0.0;
+
+    let mut dt = 0.0;
+    let mut seconds = 5.0;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
@@ -64,18 +71,19 @@ fn main() {
             Event::NewEvents(_) => {
                 // reset input states on new frame
                 {
-                    is_left_clicked = None;
-                    cursor_position = None;
-                    // last_position = app.cursor_position;
-                    wheel_delta = None;
+                    is_left_clicked = false;
+                    cursor_position = [0, 0];
+                    last_position = cursor_position;
+                    wheel_delta = 0.0;
                 }
                 // frame timing info
                 let now = Instant::now();
                 let delta = now.duration_since(last);
                 last = now;
-                frames[frame_index] = delta.as_nanos() as f64;
+                dt = delta.as_secs_f32();
+                frames[frame_index] = delta.as_secs_f64();
                 frame_index = (frame_index + 1) % (FRAMES_AVERAGE as usize);
-                let fps: f64 = f64::from(FRAMES_AVERAGE) / frames.iter().sum::<f64>();
+                fps = f64::from(FRAMES_AVERAGE) / frames.iter().sum::<f64>();
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -85,42 +93,15 @@ fn main() {
                 // update input state after accumulating event
                 // {
                 //     if let Some(is_left_clicked) = is_left_clicked {
-                //         app.is_left_clicked = is_left_clicked;
+                //         is_left_clicked = is_left_clicked;
                 //     }
                 //     if let Some(position) = cursor_position {
-                //         app.cursor_position = position;
-                //         app.cursor_delta = Some([position[0] - last_position[0], position[1] - last_position[1]]);
+                //         cursor_position = position;
+                //         cursor_delta = Some([position[0] - last_position[0], position[1] - last_position[1]]);
                 //     } else {
-                //         app.cursor_delta = None;
+                //         cursor_delta = None;
                 //     }
-                //     app.wheel_delta = wheel_delta;
-                // }
-
-                // Update uniform buffers
-                // {
-                //     if let Some(ilc) = is_left_clicked && cursor_delta.is_some() {
-                //         let delta = cursor_delta.take().unwrap();
-                //         let x_ratio = delta[0] as f32 / swapchain_properties.extent.width as f32;
-                //         let y_ratio = delta[1] as f32 / swapchain_properties.extent.height as f32;
-                //         let theta = x_ratio * 180.0_f32.to_radians();
-                //         let phi = y_ratio * 90.0_f32.to_radians();
-                //         camera.rotate(theta, phi,);
-                //     }
-                //     if let Some(wheel_delta,) = wheel_delta {
-                //         camera.forward(wheel_delta * 0.3,);
-                //     }
-
-                //     let aspect = swapchain_properties.extent.width as f32 / swapchain_properties.extent.height as
-                // f32;     let ubo = CameraUBO {
-                //         view: Matrix4::look_at(
-                //             camera.position(),
-                //             Point3::new(0.0, 0.0, 0.0,),
-                //             Vector3::new(0.0, 1.0, 0.0,),
-                //         ),
-                //         proj: math::perspective(Deg(45.0,), aspect, 0.1, 10.0,),
-                //     };
-                //     let ubos = [ubo,];
-                //     app.update_uniform_buffers(hot, ubos,);
+                //     wheel_delta = wheel_delta;
                 // }
 
                 // render
@@ -134,9 +115,57 @@ fn main() {
                             return;
                         }
                     }
+
+                    let width = render_instance.swapchain.properties.extent.width;
+                    let height = render_instance.swapchain.properties.extent.height;
+
+                    let delta = [
+                        cursor_position[0] - last_position[0],
+                        cursor_position[1] - last_position[1],
+                    ];
+
+                    // Update uniform buffers
+                    let ubo = {
+                        if is_left_clicked && (delta[0] != 0 && delta[1] != 0) {
+                            let x_ratio = delta[0] as f32 / width as f32;
+                            let y_ratio = delta[1] as f32 / height as f32;
+                            let theta = x_ratio * 180.0_f32.to_radians();
+                            let phi = y_ratio * 90.0_f32.to_radians();
+                            camera.rotate(theta, phi);
+                        }
+
+                        if wheel_delta > 0.0 {
+                            camera.forward(wheel_delta * 0.3);
+                        }
+
+                        let aspect = width as f32 / height as f32;
+                        let ubo = CameraUBO {
+                            view: Matrix4::look_at_rh(
+                                camera.position(),
+                                Point3::new(0.0, 0.0, 0.0),
+                                Vector3::new(0.0, 1.0, 0.0),
+                            ),
+                            proj: math::perspective(Deg(45.0), aspect, 0.1, 10.0),
+                        };
+
+                        ubo
+                    };
+
+                    render_instance.update_uniform_buffers(ubo);
                     dirty_swapchain = render_instance.draw_frame();
                 }
+
+                seconds -= dt;
+                if seconds <= 0.0 {
+                    println!(
+                        "FPS: {} \nCursor_Position: [{}, {}] \nLeft_Clicked: {}",
+                        fps, cursor_position[0], cursor_position[1], is_left_clicked
+                    );
+
+                    seconds = 5.0;
+                }
             }
+
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                 WindowEvent::Resized { .. } => dirty_swapchain = true,
@@ -147,24 +176,27 @@ fn main() {
                     ..
                 } => {
                     if state == ElementState::Pressed {
-                        is_left_clicked = Some(true);
+                        is_left_clicked = true;
                     } else {
-                        is_left_clicked = Some(false);
+                        is_left_clicked = false;
                     }
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     let position: (i32, i32) = position.into();
-                    cursor_position = Some([position.0, position.1]);
+                    cursor_position = [position.0, position.1];
                 }
                 WindowEvent::MouseWheel {
                     delta: MouseScrollDelta::LineDelta(_, v_lines),
                     ..
                 } => {
-                    wheel_delta = Some(v_lines);
+                    wheel_delta = v_lines;
                 }
                 _ => (),
             },
-            Event::LoopDestroyed => render_instance.wait_gpu_idle(),
+            Event::LoopDestroyed => {
+                render_instance.wait_gpu_idle();
+                println!("completed");
+            }
             _ => (),
         }
     });

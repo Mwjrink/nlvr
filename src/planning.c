@@ -38,6 +38,7 @@ struct vex<T> {
     &[T] active () {}
 }
 
+// this becomes a pipeline once a mesh shader can be used instead (streaming commands to vertex shader logic) 
 vex<Renderables>.active() ->
 GPU_Compute {
     input {
@@ -49,14 +50,23 @@ GPU_Compute {
             index_offset:   u32,
             texture_index:  u32,
             instance_count: u32,
-            model:          mat4,
+            distance:       i32, // used for LOD computing
+
+            // only in animated shader
+            bone_count:     u32,
         },
         renderable_count:   u64,
-        model:              mat4[renderable.sum(ren -> ren.instance_count)],
-        // projection:      mat4,
-        // view:            mat4,
+        model:              mat4[renderable.sum(r -> r.instance_count)],
+        // two versions: static & dynamic, animated
+        // static & dynamic is just model*view*proj with LOD
+        // animated does bone transforms and has the following extra input:
+        bones:              mat4[renderable.sum(r -> r.instance_count * r.bone_count)];
+
+        // multiply by proj*view*model?
         projview:           mat4, // projection * view
-        indexVertexBuffer:  vkBuffer,
+
+        out_index_buffer:   vkBuffer, // because of LODS // add cumulative offset 
+        out_vertex_buffer:  vkBuffer, // Skeleton animations for animated objects and LOD vertices // add cumulative offset
     }
 
     return {

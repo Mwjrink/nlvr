@@ -1,17 +1,17 @@
 use super::context::*;
+use super::utils::*;
 use ash::{version::DeviceV1_0, vk, Device};
 use std::mem::{align_of, size_of};
-use super::utils::*;
 
 pub struct BuffPtr {
     pub offset: u64,
-    pub size:   vk::DeviceSize,
+    pub size: vk::DeviceSize,
 }
 
 pub struct Buffer {
     pub buffer: vk::Buffer,
     pub memory: vk::DeviceMemory,
-    pub size:   vk::DeviceSize,
+    pub size: vk::DeviceSize,
     /* VkDevice device;
      * VkBuffer buffer = VK_NULL_HANDLE;
      * VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -47,30 +47,29 @@ impl Buffer {
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         mem_properties: vk::MemoryPropertyFlags,
-    ) -> Buffer
-    {
+    ) -> Buffer {
         let device = vk_context.device();
         let buffer = {
             let buffer_info = vk::BufferCreateInfo::builder()
-                .size(size,)
-                .usage(usage,)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE,)
+                .size(size)
+                .usage(usage)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .build();
-            unsafe { device.create_buffer(&buffer_info, None,).unwrap() }
+            unsafe { device.create_buffer(&buffer_info, None).unwrap() }
         };
 
-        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer,) };
+        let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         let memory = {
-            let mem_type = Self::find_memory_type(mem_requirements, vk_context.get_mem_properties(), mem_properties,);
+            let mem_type = Self::find_memory_type(mem_requirements, vk_context.get_mem_properties(), mem_properties);
 
             let alloc_info = vk::MemoryAllocateInfo::builder()
-                .allocation_size(mem_requirements.size,)
-                .memory_type_index(mem_type,)
+                .allocation_size(mem_requirements.size)
+                .memory_type_index(mem_type)
                 .build();
-            unsafe { device.allocate_memory(&alloc_info, None,).unwrap() }
+            unsafe { device.allocate_memory(&alloc_info, None).unwrap() }
         };
 
-        unsafe { device.bind_buffer_memory(buffer, memory, 0,).unwrap() };
+        unsafe { device.bind_buffer_memory(buffer, memory, 0).unwrap() };
 
         Buffer {
             buffer,
@@ -89,13 +88,12 @@ impl Buffer {
         requirements: vk::MemoryRequirements,
         mem_properties: vk::PhysicalDeviceMemoryProperties,
         required_properties: vk::MemoryPropertyFlags,
-    ) -> u32
-    {
+    ) -> u32 {
         for i in 0..mem_properties.memory_type_count {
-            if requirements.memory_type_bits & (1 << i) != 0 &&
-                mem_properties.memory_types[i as usize]
+            if requirements.memory_type_bits & (1 << i) != 0
+                && mem_properties.memory_types[i as usize]
                     .property_flags
-                    .contains(required_properties,)
+                    .contains(required_properties)
             {
                 return i;
             }
@@ -116,18 +114,17 @@ impl Buffer {
         dst: vk::Buffer,
         size: vk::DeviceSize,
         dst_offset: u64,
-    )
-    {
+    ) {
         execute_one_time_commands(&device, command_pool, transfer_queue, |buffer| {
             let region = vk::BufferCopy {
                 src_offset: 0,
                 dst_offset,
                 size,
             };
-            let regions = [region,];
+            let regions = [region];
 
-            unsafe { device.cmd_copy_buffer(buffer, src, dst, &regions,) };
-        },);
+            unsafe { device.cmd_copy_buffer(buffer, src, dst, &regions) };
+        });
     }
 
     /// Create a buffer and it's gpu  memory and fill it.
@@ -136,16 +133,15 @@ impl Buffer {
     /// a device local buffer. The data is first copied from the cpu to the
     /// staging buffer. Then we copy the data from the staging buffer to the
     /// final buffer using a one-time command buffer.
-    pub fn create_device_local_buffer_with_data<A, T: Copy,>(
+    pub fn create_device_local_buffer_with_data<A, T: Copy>(
         vk_context: &VkContext,
         command_pool: vk::CommandPool,
         transfer_queue: vk::Queue,
         usage: vk::BufferUsageFlags,
         data: &[T],
-    ) -> Buffer
-    {
+    ) -> Buffer {
         let device = vk_context.device();
-        let size = (data.len() * size_of::<T,>()) as vk::DeviceSize;
+        let size = (data.len() * size_of::<T>()) as vk::DeviceSize;
         let Buffer {
             buffer: staging_buffer,
             memory: staging_memory,
@@ -159,11 +155,11 @@ impl Buffer {
 
         unsafe {
             let data_ptr = device
-                .map_memory(staging_memory, 0, size, vk::MemoryMapFlags::empty(),)
+                .map_memory(staging_memory, 0, size, vk::MemoryMapFlags::empty())
                 .unwrap();
-            let mut align = ash::util::Align::new(data_ptr, align_of::<A,>() as _, staging_mem_size,);
-            align.copy_from_slice(data,);
-            device.unmap_memory(staging_memory,);
+            let mut align = ash::util::Align::new(data_ptr, align_of::<A>() as _, staging_mem_size);
+            align.copy_from_slice(data);
+            device.unmap_memory(staging_memory);
         };
 
         let buffer = Self::create_buffer(
@@ -184,8 +180,8 @@ impl Buffer {
         );
 
         unsafe {
-            device.destroy_buffer(staging_buffer, None,);
-            device.free_memory(staging_memory, None,);
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_memory, None);
         };
 
         buffer
@@ -193,14 +189,9 @@ impl Buffer {
 
     pub fn create_device_local_buffer(
         vk_context: &VkContext,
-        command_pool: vk::CommandPool,
-        transfer_queue: vk::Queue,
         usage: vk::BufferUsageFlags,
         size: vk::DeviceSize,
-    ) -> Buffer
-    {
-        let device = vk_context.device();
-
+    ) -> Buffer {
         let buffer = Self::create_buffer(
             vk_context,
             size,
@@ -211,17 +202,16 @@ impl Buffer {
         buffer
     }
 
-    pub fn transfer_to_device_local_buffer<A, T: Copy,>(
+    pub fn transfer_to_device_local_buffer<A, T: Copy>(
         vk_context: &VkContext,
         command_pool: vk::CommandPool,
         transfer_queue: vk::Queue,
         buffer: &Buffer,
         data: &[T],
         buffer_offset: u64,
-    ) -> vk::DeviceSize
-    {
+    ) -> vk::DeviceSize {
         let device = vk_context.device();
-        let size = (data.len() * size_of::<T,>()) as vk::DeviceSize;
+        let size = (data.len() * size_of::<T>()) as vk::DeviceSize;
         let Buffer {
             buffer: staging_buffer,
             memory: staging_memory,
@@ -235,11 +225,11 @@ impl Buffer {
 
         unsafe {
             let data_ptr = device
-                .map_memory(staging_memory, 0, size, vk::MemoryMapFlags::empty(),)
+                .map_memory(staging_memory, 0, size, vk::MemoryMapFlags::empty())
                 .unwrap();
-            let mut align = ash::util::Align::new(data_ptr, align_of::<A,>() as _, staging_mem_size,);
-            align.copy_from_slice(data,);
-            device.unmap_memory(staging_memory,);
+            let mut align = ash::util::Align::new(data_ptr, align_of::<A>() as _, staging_mem_size);
+            align.copy_from_slice(data);
+            device.unmap_memory(staging_memory);
         };
 
         Self::copy_buffer(
@@ -253,20 +243,20 @@ impl Buffer {
         );
 
         unsafe {
-            device.destroy_buffer(staging_buffer, None,);
-            device.free_memory(staging_memory, None,);
+            device.destroy_buffer(staging_buffer, None);
+            device.free_memory(staging_memory, None);
         };
 
         size
     }
 
-    fn cleanup(&mut self, vk_context: &VkContext,) {
+    pub fn cleanup(&mut self, vk_context: &VkContext) {
         log::debug!("Dropping buffer.");
 
         let device = vk_context.device();
         unsafe {
-            device.free_memory(self.memory, None,);
-            device.destroy_buffer(self.buffer, None,);
+            device.free_memory(self.memory, None);
+            device.destroy_buffer(self.buffer, None);
         }
     }
 }
