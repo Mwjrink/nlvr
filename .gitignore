@@ -1,5 +1,6 @@
 /target
 **/*.rs.bk
 **/*.spv
-/assets
+/assets/*
+!assets/shaders/
 *.sublime-*
