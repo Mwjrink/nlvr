@@ -22,11 +22,11 @@ use ash::{
         khr::{Surface, Swapchain},
     },
     util::Align,
-    version::{DeviceV1_0, EntryV1_0, InstanceV1_0},
+    version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1},
     vk::{self, CommandBuffer},
     Device, Entry, Instance,
 };
-use cgmath::{vec3, Deg, Matrix4};
+use cgmath::Matrix4;
 use galloc::{Galloc, MemoryBlock};
 use std::{
     ffi::{CStr, CString},
@@ -47,8 +47,8 @@ pub struct RenderInstance<T: UBO + Copy> {
     msaa_samples: vk::SampleCountFlags,
     depth_format: vk::Format,
     descriptor_set_layout: vk::DescriptorSetLayout,
-    command_pool: vk::CommandPool,
-    transient_command_pool: vk::CommandPool,
+    graphics_command_pool: vk::CommandPool,
+    transfer_command_pool: vk::CommandPool,
     in_flight_frames: InFlightFrames,
     graphics_queue: vk::Queue,
     present_queue: vk::Queue,
@@ -84,13 +84,18 @@ pub struct RenderInstance<T: UBO + Copy> {
     uniform_buffers_align: [Align<T>; MAX_FRAMES_IN_FLIGHT as usize],
 
     ubo_data: Option<T>,
+
+    texture_sampler: vk::Sampler,
+
+    descriptor_image_count: u32,
 }
 
 impl<T: UBO + Copy> RenderInstance<T> {
     pub fn create(window: &Window) -> RenderInstance<T> {
         log::debug!("Creating application.");
 
-        let frames_in_flight = 3;
+        // TODO dont use a constant, allow for double or triple buffering options
+        // let frames_in_flight = 3;
 
         let entry = Entry::new().expect("Failed to create entry.");
         let instance = Self::create_instance(&entry, window);
@@ -102,9 +107,9 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let (physical_device, queue_families_indices) = Self::pick_physical_device(&instance, &surface, surface_khr);
 
-        let test = unsafe { instance.get_physical_device_properties(physical_device) };
+        // let test = unsafe { instance.get_physical_device_properties(physical_device) };
 
-        println!("test: {:?}", test);
+        // println!("test: {:?}", test);
 
         // move to a queue class potentially
         let (device, graphics_queue, present_queue, transfer_queue) =
@@ -121,9 +126,9 @@ impl<T: UBO + Copy> RenderInstance<T> {
             queue_families_indices,
         );
 
-        let command_pool = Self::create_command_pool(
+        let graphics_command_pool = Self::create_command_pool(
             vk_context.device(),
-            queue_families_indices,
+            queue_families_indices.graphics_index,
             vk::CommandPoolCreateFlags::empty(),
         );
 
@@ -134,7 +139,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             &vk_context,
             queue_families_indices,
             [window.inner_size().width, window.inner_size().height],
-            command_pool,
+            graphics_command_pool,
             graphics_queue,
             msaa_samples,
             depth_format,
@@ -154,9 +159,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
             &Vertex::get_attribute_descriptions(),
         );
 
-        let transient_command_pool = Self::create_command_pool(
+        // TODO decide if this should be transient or whats up with command pools
+        let transfer_command_pool = Self::create_command_pool(
             vk_context.device(),
-            queue_families_indices,
+            queue_families_indices.transfer_index,
             vk::CommandPoolCreateFlags::TRANSIENT,
         );
 
@@ -179,6 +185,28 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let global_uniform_buffers = Self::create_uniform_buffers(&vk_context, MAX_FRAMES_IN_FLIGHT as _);
 
+        let texture_sampler = {
+            let sampler_info = vk::SamplerCreateInfo::builder()
+                .mag_filter(vk::Filter::LINEAR,)
+                .min_filter(vk::Filter::LINEAR,)
+                .address_mode_u(vk::SamplerAddressMode::REPEAT,)
+                .address_mode_v(vk::SamplerAddressMode::REPEAT,)
+                .address_mode_w(vk::SamplerAddressMode::REPEAT,)
+                .anisotropy_enable(true,)
+                .max_anisotropy(16.0,)
+                .border_color(vk::BorderColor::INT_OPAQUE_BLACK,)
+                .unnormalized_coordinates(false,)
+                .compare_enable(false,)
+                .compare_op(vk::CompareOp::ALWAYS,)
+                .mipmap_mode(vk::SamplerMipmapMode::LINEAR,)
+                .mip_lod_bias(0.0,)
+                .min_lod(0.0,)
+                .max_lod(0 as _,) //max_mip_levels
+                .build();
+
+            unsafe { vk_context.device().create_sampler(&sampler_info, None).unwrap() }
+        };
+
         let descriptor_pool = Self::create_descriptor_pool(vk_context.device(), MAX_FRAMES_IN_FLIGHT as _);
         let descriptor_sets = Self::create_descriptor_sets(
             vk_context.device(),
@@ -188,7 +216,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 .iter()
                 .map(|buff| buff.buffer)
                 .collect::<Vec<vk::Buffer>>(),
-            // texture, // global texture atlas
+            // texture_sampler,
         );
 
         let size = size_of::<T>() as vk::DeviceSize;
@@ -218,6 +246,12 @@ impl<T: UBO + Copy> RenderInstance<T> {
             ]
         };
 
+        // let image_info = vk::DescriptorImageInfo::builder()
+        //     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        //     // .image_view()
+        //     .sampler(texture_sampler).build();
+        // let image_infos = [image_info];
+
         Self {
             vk_context,
             pipeline_layout: layout,
@@ -226,8 +260,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
             descriptor_set_layout,
             swapchain,
             render_pass,
-            command_pool,
-            transient_command_pool,
+            graphics_command_pool,
+            transfer_command_pool,
             in_flight_frames,
             framebuffers: swapchain_framebuffers,
             vertex_binding_descs: Vertex::get_binding_description(),
@@ -263,6 +297,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
             uniform_buffers_align,
 
             ubo_data: None,
+
+            texture_sampler,
+
+            descriptor_image_count: 0,
         }
     }
 
@@ -286,13 +324,43 @@ impl<T: UBO + Copy> RenderInstance<T> {
     */
 
     // TODO texture should not be optional, in theory
-    pub fn renderable_from_file(&mut self, model_path: String, texture_path: Option<String>) {
+    // TODO should this be returning?
+    pub fn renderable_from_file(&mut self, model_path: String, texture_path: String) -> usize {
         //-> Renderable {
-        // TODO should this be returning?
         // if let Some(tex_path) = texture_path {
-        //     let texture =
-        //         Texture::create_texture_image(&self.vk_context, self.command_pool, self.graphics_queue, tex_path);
+        let texture = Texture::create_texture_image(
+            &self.vk_context,
+            self.graphics_command_pool,
+            self.graphics_queue,
+            texture_path,
+        );
         // }
+
+        let image_info = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(texture.image.view.unwrap())
+            .sampler(self.texture_sampler)
+            .build();
+
+        let texture_index = self.descriptor_image_count;
+        self.descriptor_image_count += 1;
+
+        unsafe {
+            let image_infos = &[image_info];
+            for set in &self.descriptor_sets {
+                let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
+                    .dst_set(*set)
+                    .dst_binding(1)
+                    .dst_array_element(texture_index)
+                    // .descriptor_count
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(image_infos);
+
+                self.vk_context
+                    .device()
+                    .update_descriptor_sets(&[sampler_descriptor_write.build()], &[]);
+            }
+        }
 
         let (vertices, indices) = Self::load_model(model_path.clone());
 
@@ -317,7 +385,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 .unwrap();
             let vertices_size = Self::transfer_vertices(
                 &self.vk_context,
-                self.transient_command_pool,
+                self.transfer_command_pool,
                 self.transfer_queue,
                 &self.vertex_buffer,
                 &vertices,
@@ -350,7 +418,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             let index_block = self.index_alloc.allocate(indices.len() * size_of::<u32>()).unwrap();
             let indices_size = Self::transfer_indices(
                 &self.vk_context,
-                self.transient_command_pool,
+                self.transfer_command_pool,
                 self.transfer_queue,
                 &self.index_buffer,
                 &indices,
@@ -372,21 +440,27 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         // self.vertex_buffer.add some shit to it
 
-        let result = Renderable {
-            model_index_count: indices.len(),
-            // texture,
-            // descriptor_pool,
-            // descriptor_sets,
-            // uniform_buffers,
+        let result = self.renderables.len();
+        self.renderables.push(Renderable {
+            texture_index: texture_index as _,
+            texture,
+            //
             vertex_buffer_ptr,
+            vertex_count: vertices.len(),
+            //
             index_buffer_ptr,
+            index_count: indices.len(),
             //
             asset_path: model_path,
-            // command_buffers,
+            //
             instances: Vec::new(),
-        };
+        });
 
-        self.renderables.push(result);
+        return result;
+    }
+
+    pub fn get_renderable(&mut self, index: usize) -> &mut Renderable {
+        &mut self.renderables[index]
     }
 
     fn create_sync_objects(device: &Device) -> InFlightFrames {
@@ -406,8 +480,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             .application_version(vk::make_version(0, 1, 0))
             .engine_name(engine_name.as_c_str())
             .engine_version(vk::make_version(0, 1, 0))
-            .api_version(vk::make_version(1, 2, 148))
-            .build();
+            .api_version(vk::make_version(1, 2, 148));
 
         let extension_names = ash_window::enumerate_required_extensions(window).unwrap();
 
@@ -517,8 +590,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let pool_info = vk::DescriptorPoolCreateInfo::builder()
             .pool_sizes(&pool_sizes)
-            .max_sets(size)
-            .build();
+            .max_sets(size);
 
         unsafe { device.create_descriptor_pool(&pool_info, None).unwrap() }
     }
@@ -529,13 +601,13 @@ impl<T: UBO + Copy> RenderInstance<T> {
         pool: vk::DescriptorPool,
         layout: vk::DescriptorSetLayout,
         uniform_buffers: &[vk::Buffer],
-        // texture: Texture, // global texture atlas
+        // texture_sampler: vk::Sampler,
+        // texture: Texture, // texture array
     ) -> Vec<vk::DescriptorSet> {
         let layouts = (0..uniform_buffers.len()).map(|_| layout).collect::<Vec<_>>();
         let alloc_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(pool)
-            .set_layouts(&layouts)
-            .build();
+            .set_layouts(&layouts);
         let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap() };
 
         descriptor_sets
@@ -549,10 +621,11 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .build();
                 let buffer_infos = [buffer_info];
 
+                // TODO dynamic number of textures, make this an array of texture samplers? something dynamic for the different objects to be transferred
                 // let image_info = vk::DescriptorImageInfo::builder()
                 //     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                //     .image_view(texture.image.view.unwrap())
-                //     .sampler(texture.sampler.unwrap())
+                //     .image_view()
+                //     .sampler(texture_sampler)
                 //     .build();
                 // let image_infos = [image_info];
 
@@ -561,17 +634,17 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .dst_binding(0)
                     .dst_array_element(0)
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                    .buffer_info(&buffer_infos)
-                    .build();
+                    .buffer_info(&buffer_infos);
+
+                // TODO dynamic number of textures
                 // let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
                 //     .dst_set(*set)
                 //     .dst_binding(1)
                 //     .dst_array_element(0)
                 //     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                //     .image_info(&image_infos)
-                //     .build();
+                //     .image_info(&image_infos);
 
-                let descriptor_writes = [ubo_descriptor_write]; //, sampler_descriptor_write];
+                let descriptor_writes = [ubo_descriptor_write.build()]; //, sampler_descriptor_write.build()];
 
                 unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) }
             });
@@ -634,8 +707,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .attachments(&attachments)
                     .width(swapchain_properties.extent.width)
                     .height(swapchain_properties.extent.height)
-                    .layers(1)
-                    .build();
+                    .layers(1);
                 unsafe { device.create_framebuffer(&framebuffer_info, None).unwrap() }
             })
             .collect::<Vec<_>>()
@@ -667,7 +739,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             &self.vk_context,
             self.vk_context.queue_families_indices,
             dimensions,
-            self.command_pool,
+            self.graphics_command_pool,
             self.graphics_queue,
             self.msaa_samples,
             self.depth_format,
@@ -705,8 +777,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .attachments(&attachments)
                     .width(swapchain_wrapper.properties.extent.width)
                     .height(swapchain_wrapper.properties.extent.height)
-                    .layers(1)
-                    .build();
+                    .layers(1);
                 unsafe { device.create_framebuffer(&framebuffer_info, None).unwrap() }
             })
             .collect::<Vec<_>>();
@@ -714,16 +785,16 @@ impl<T: UBO + Copy> RenderInstance<T> {
         // this needs to be rebuilt in the renderable objects?
         let command_buffers = Self::create_and_register_command_buffers(
             device,
-            self.command_pool,
+            self.graphics_command_pool,
             &framebuffers,
             render_pass,
             swapchain_wrapper.properties,
             self.vertex_buffer.buffer,
             self.index_buffer.buffer,
-            self.renderables[0].model_index_count, // TODO make this dynamic
             layout,
             &self.descriptor_sets,
             pipeline,
+            &self.renderables,
         );
 
         self.swapchain = swapchain_wrapper;
@@ -825,8 +896,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
         vertex_binding_descs: vk::VertexInputBindingDescription,
         vertex_attribute_descs: &[vk::VertexInputAttributeDescription],
     ) -> (vk::Pipeline, vk::PipelineLayout) {
-        let vertex_source = read_shader_from_file("shaders/shader.vert.spv");
-        let fragment_source = read_shader_from_file("shaders/shader.frag.spv");
+        let vertex_source = read_shader_from_file("shaders/vert.spv");
+        let fragment_source = read_shader_from_file("shaders/frag.spv");
 
         log::debug!("Compiling shaders...");
 
@@ -933,14 +1004,19 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let layout = {
             let layouts = [descriptor_set_layout];
-            let push_constant_ranges = vk::PushConstantRange {
+            let push_constant_range_v = vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX,
                 offset: 0,
                 size: size_of::<Matrix4<f32>>() as _,
             };
+            let push_constant_range_f = vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: size_of::<Matrix4<f32>>() as _,
+                size: size_of::<u32>() as _,
+            };
             let layout_info = vk::PipelineLayoutCreateInfo::builder()
                 .set_layouts(&layouts)
-                .push_constant_ranges(&[push_constant_ranges])
+                .push_constant_ranges(&[push_constant_range_v, push_constant_range_f])
                 .build();
 
             unsafe { device.create_pipeline_layout(&layout_info, None).unwrap() }
@@ -984,15 +1060,23 @@ impl<T: UBO + Copy> RenderInstance<T> {
     ) -> vk::DescriptorSetLayout {
         let sampler_binding = vk::DescriptorSetLayoutBinding::builder()
             .binding(1)
-            .descriptor_count(1)
+            .descriptor_count(1048576)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .build();
+
         let bindings = [ubo_binding, sampler_binding];
 
-        let layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings).build();
+        let mut extended_info = vk::DescriptorSetLayoutBindingFlagsCreateInfoEXT::builder().binding_flags(&[
+            vk::DescriptorBindingFlags::PARTIALLY_BOUND_EXT,
+            vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT,
+        ]);
+        extended_info.binding_count = 0;
 
-        unsafe { device.create_descriptor_set_layout(&layout_info, None).unwrap() }
+        let mut layout_info = vk::DescriptorSetLayoutCreateInfo::builder().bindings(&bindings);
+        layout_info.p_next = &mut extended_info.build() as *mut _ as *mut std::ffi::c_void;
+
+        unsafe { device.create_descriptor_set_layout(&layout_info.build(), None).unwrap() }
     }
 
     fn create_and_register_command_buffers(
@@ -1003,10 +1087,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
         swapchain_properties: SwapchainProperties,
         vertex_buffer: vk::Buffer,
         index_buffer: vk::Buffer,
-        index_count: usize,
         pipeline_layout: vk::PipelineLayout,
         descriptor_sets: &[vk::DescriptorSet],
         graphics_pipeline: vk::Pipeline,
+        renderables: &Vec<Renderable>,
     ) -> Vec<vk::CommandBuffer> {
         let allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
@@ -1059,10 +1143,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
             // Bind vertex buffer
             let vertex_buffers = [vertex_buffer];
-            // let offsets = renderables
-            //     .iter()
-            //     .map(|r| r.vertex_buffer_ptr.offset,)
-            //     .collect::<Vec<u64,>>();
+            // TODO offsets are used for non interleaved data
             unsafe { device.cmd_bind_vertex_buffers(buffer, 0, &vertex_buffers, &[0]) };
 
             // Bind index buffer
@@ -1081,14 +1162,25 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 )
             };
 
-            // Render objects
-            let base_rot = Matrix4::from_angle_x(Deg(270.0));
-            let transform_0 = Matrix4::from_translation(vec3(0.1, 0.0, -1.0)) * base_rot;
-            let transform_1 = Matrix4::from_translation(vec3(-0.1, 0.0, 1.0)) * base_rot;
+            let mut cumulative_vertex_count = 0;
+            let mut cumulative_index_count = 0;
+            for renderable in renderables {
+                for transform in &renderable.instances {
+                    Self::draw_indexed(
+                        device,
+                        buffer,
+                        renderable.index_count,
+                        pipeline_layout,
+                        *transform,
+                        cumulative_index_count,
+                        cumulative_vertex_count,
+                        renderable.texture_index,
+                    );
+                }
 
-            Self::cmd_draw_chalet(device, buffer, index_count, pipeline_layout, transform_0);
-
-            Self::cmd_draw_chalet(device, buffer, index_count, pipeline_layout, transform_1);
+                cumulative_vertex_count += renderable.vertex_count as i32;
+                cumulative_index_count += renderable.index_count as u32;
+            }
 
             // End render pass
             unsafe { device.cmd_end_render_pass(buffer) };
@@ -1133,6 +1225,21 @@ impl<T: UBO + Copy> RenderInstance<T> {
             transfer_index: transfer.unwrap(),
         };
 
+        unsafe {
+            let mut indexing_features = vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder();
+            let mut device_features = vk::PhysicalDeviceFeatures2::builder().build();
+            device_features.p_next = &mut indexing_features as *mut _ as *mut std::ffi::c_void; //&mut std::ffi::c_void::from();
+
+            instance.get_physical_device_features2(device, &mut device_features);
+
+            if indexing_features.descriptor_binding_partially_bound == 1
+                && indexing_features.runtime_descriptor_array == 1
+                && indexing_features.descriptor_binding_variable_descriptor_count == 1
+            {
+                println!("Supports unbounded texture arrays!");
+            }
+        }
+
         (device, queue_families_indices)
     }
 
@@ -1142,7 +1249,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         surface_khr: vk::SurfaceKHR,
         device: vk::PhysicalDevice,
     ) -> bool {
-        let (graphics, present, transfer) = Self::find_queue_families(instance, surface, surface_khr, device);
+        let (graphics, present, _) = Self::find_queue_families(instance, surface, surface_khr, device);
         let extention_support = Self::check_device_extension_support(instance, device);
         let is_swapchain_adequate = {
             let details = SwapchainSupportDetails::new(device, surface, surface_khr);
@@ -1239,11 +1346,11 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
     fn create_command_pool(
         device: &Device,
-        queue_families_indices: QueueFamiliesIndices,
+        queue_families_index: u32,
         create_flags: vk::CommandPoolCreateFlags,
     ) -> vk::CommandPool {
         let command_pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(queue_families_indices.graphics_index)
+            .queue_family_index(queue_families_index)
             .flags(create_flags)
             .build();
 
@@ -1258,7 +1365,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
         for required in required_extentions.iter() {
             let found = extension_props.iter().any(|ext| {
                 let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
-                required == &name
+                println!("{}", name.to_str().unwrap());
+                required == name.to_str().unwrap()
             });
 
             if !found {
@@ -1306,19 +1414,28 @@ impl<T: UBO + Copy> RenderInstance<T> {
         };
 
         let device_extensions = Self::get_required_device_extensions();
-        let device_extensions_ptrs = device_extensions.iter().map(|ext| ext.as_ptr()).collect::<Vec<_>>();
+        let device_extensions_ptrs = device_extensions
+            .iter()
+            .map(|ext| ext.as_ptr() as *const i8)
+            .collect::<Vec<_>>();
 
         let device_features = vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true).build();
+        let mut indexing_features = vk::PhysicalDeviceDescriptorIndexingFeaturesEXT::builder()
+            .descriptor_binding_partially_bound(true)
+            .runtime_descriptor_array(true)
+            .descriptor_binding_variable_descriptor_count(true)
+            .build();
 
         let (_layer_names, layer_names_ptrs) = get_layer_names_and_pointers();
 
         let mut device_create_info_builder = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
-            .enabled_extension_names(&device_extensions_ptrs)
+            .enabled_extension_names(device_extensions_ptrs.as_slice())
             .enabled_features(&device_features);
         if ENABLE_VALIDATION_LAYERS {
             device_create_info_builder = device_create_info_builder.enabled_layer_names(&layer_names_ptrs)
         }
+        device_create_info_builder.p_next = &mut indexing_features as *mut _ as *mut std::ffi::c_void;
         let device_create_info = device_create_info_builder.build();
 
         // Build device and queues
@@ -1334,16 +1451,27 @@ impl<T: UBO + Copy> RenderInstance<T> {
         (device, graphics_queue, present_queue, transfer_queue)
     }
 
-    fn get_required_device_extensions() -> [&'static CStr; 1] {
-        [Swapchain::name()]
+    fn get_required_device_extensions() -> Vec<String> {
+        vec![
+            unsafe {
+                CStr::from_ptr(Swapchain::name().as_ptr())
+                    .to_string_lossy()
+                    .into_owned()
+            },
+            // "VK_EXT_descriptor_indexing".to_string(),
+            // "runtimeDescriptorArray".to_string(),
+        ]
     }
 
-    fn cmd_draw_chalet(
+    fn draw_indexed(
         device: &Device,
         buffer: vk::CommandBuffer,
         index_count: usize,
         pipeline_layout: vk::PipelineLayout,
         transform: Matrix4<f32>,
+        cumulative_index_count: u32,
+        cumulative_vertex_count: i32,
+        texture_index: u32,
     ) {
         // Push constants
         unsafe {
@@ -1353,11 +1481,28 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 any_as_u8_slice(&transform),
-            )
+            );
+
+            device.cmd_push_constants(
+                buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                size_of::<Matrix4<f32>>() as _,
+                any_as_u8_slice(&texture_index),
+            );
         };
 
         // Draw
-        unsafe { device.cmd_draw_indexed(buffer, index_count as _, 1, 0, 0, 0) };
+        unsafe {
+            device.cmd_draw_indexed(
+                buffer,
+                index_count as _,
+                1,
+                cumulative_index_count,
+                cumulative_vertex_count,
+                0,
+            )
+        };
     }
 
     // TODO allow any number of ubos to be passed?
@@ -1463,7 +1608,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             self.framebuffers
                 .iter()
                 .for_each(|f| device.destroy_framebuffer(*f, None));
-            device.free_command_buffers(self.command_pool, &self.command_buffers);
+            device.free_command_buffers(self.graphics_command_pool, &self.command_buffers);
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.pipeline_layout, None);
             device.destroy_render_pass(self.render_pass, None);
@@ -1480,10 +1625,15 @@ impl<T: UBO + Copy> Drop for RenderInstance<T> {
         log::debug!("Dropping application.");
         let device = self.vk_context.device();
 
+        for renderable in &mut self.renderables {
+            renderable.texture.destroy(device);
+        }
+
         self.swapchain.cleanup(device);
         self.cleanup(device);
         self.in_flight_frames.destroy(device);
         unsafe {
+            device.destroy_sampler(self.texture_sampler, None);
             device.destroy_descriptor_pool(self.descriptor_pool, None);
             device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
 
@@ -1495,8 +1645,8 @@ impl<T: UBO + Copy> Drop for RenderInstance<T> {
             self.index_buffer.cleanup(&self.vk_context);
             self.vertex_buffer.cleanup(&self.vk_context);
             // self.texture.destroy(device,);
-            device.destroy_command_pool(self.transient_command_pool, None);
-            device.destroy_command_pool(self.command_pool, None);
+            device.destroy_command_pool(self.transfer_command_pool, None);
+            device.destroy_command_pool(self.graphics_command_pool, None);
 
             device.destroy_device(None);
         }

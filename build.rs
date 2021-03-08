@@ -32,8 +32,10 @@ fn compile_shaders() {
         .for_each(|dir| {
             let path = dir.path();
             let name = path.file_name().unwrap().to_str().unwrap();
-            let output_name = format!("{}.spv", &name);
             println!("Found file {:?}.\nCompiling...", path.as_os_str());
+
+            let stage = name.strip_prefix("shader_stage.").unwrap();
+            let output_name = format!("{}.spv", &stage);
 
             let result = Command::new("glslangValidator")
                 .current_dir(&shader_dir_path)
@@ -41,6 +43,10 @@ fn compile_shaders() {
                 .arg(&path)
                 .arg("-o")
                 .arg(output_name)
+                .arg("-e")
+                .arg("main")
+                .arg("-S")
+                .arg(stage)
                 .output();
 
             handle_program_result(result);

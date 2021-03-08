@@ -106,12 +106,12 @@ impl SwapchainWrapper {
 
         let swapchain = Swapchain::new(vk_context.instance(), vk_context.device(),);
         let swapchain_khr = unsafe { swapchain.create_swapchain(&create_info, None,).unwrap() };
-        let vkImages = unsafe { swapchain.get_swapchain_images(swapchain_khr,).unwrap() };
+        let vk_images = unsafe { swapchain.get_swapchain_images(swapchain_khr,).unwrap() };
 
-        let mut images = vkImages
+        let mut images = vk_images
             .iter()
-            .map(|vkImage| Image {
-                image:  *vkImage,
+            .map(|vk_image| Image {
+                image:  *vk_image,
                 memory: vk::DeviceMemory::null(),
                 view:   None,
             },)

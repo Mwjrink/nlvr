@@ -1,4 +1,4 @@
-use cgmath::Matrix4;
+use cgmath::{vec3, Matrix4};
 use nlvr::lib::{camera::Camera, math, renderinstance::*, ubo::CameraUBO};
 
 // use winit::monitor::VideoMode;
@@ -39,11 +39,37 @@ fn main() {
     // let mut app = VulkanApp::new(&window,);
 
     let mut render_instance = RenderInstance::<CameraUBO>::create(&window);
-    // let mut cottage_renderable =
-    render_instance.renderable_from_file("models/chalet.obj".to_string(), None);
+    let cottage_renderable =
+        render_instance.renderable_from_file("chalet/chalet.obj".to_string(), "chalet/chalet.jpg".to_string());
 
-    // let transform = Matrix4::from_scale(1.0);
-    // let cottage_renderable_instance = cottage_renderable.create_instance(transform);
+    // let rock_assembly_cliffs_renderable = render_instance.renderable_from_file(
+    // "quixel/Rock_Assembly_Cliffs_siEoZ_8K_3d_ms/siEoZ_High.obj".to_string(),
+    // None,
+    // );
+    let fire_pit_renderable = render_instance.renderable_from_file(
+        "quixel/fire_pit/fire_pit.obj".to_string(),
+        "quixel/fire_pit/fire_pit_albedo.jpg".to_string(),
+    );
+
+    let base_rot = Matrix4::from_angle_x(Deg(270.0));
+    let transform_0 = Matrix4::from_translation(vec3(0.1, 0.0, -1.0)) * base_rot;
+    let transform_1 = Matrix4::from_translation(vec3(-0.1, 0.0, 1.0)) * Matrix4::from_scale(0.01);
+    // let transform_2 = Matrix4::from_translation(vec3(0.0, 0.0, 0.0)) * base_rot * Matrix4::from_scale(0.01);
+
+    let _cottage_renderable_instance_0 = render_instance
+        .get_renderable(cottage_renderable)
+        .create_instance(transform_0);
+    // let cottage_renderable_instance_1 = render_instance
+    //     .get_renderable(cottage_renderable)
+    //     .create_instance(transform_1);
+
+    let _fire_pit_renderable_instance_0 = render_instance
+        .get_renderable(fire_pit_renderable)
+        .create_instance(transform_1);
+
+    // let rock_assembly_cliffs_renderable_instance_0 = render_instance
+    // .get_renderable(rock_assembly_cliffs_renderable)
+    // .create_instance(transform_2);
 
     let mut camera = Camera::default();
 
@@ -125,6 +151,8 @@ fn main() {
                         cursor_position[1] - last_position[1],
                     ];
 
+                    // translate
+
                     // Update uniform buffers
                     let ubo = {
                         if is_left_clicked && (delta[0] != 0 && delta[1] != 0) {
@@ -135,7 +163,7 @@ fn main() {
                             camera.rotate(theta, phi);
                         }
 
-                        if wheel_delta > 0.0 {
+                        if wheel_delta != 0.0 {
                             camera.forward(wheel_delta * 0.3);
                         }
 
