@@ -22,6 +22,18 @@ const FRAMES_AVERAGE: u32 = 5;
 
 // use vulkan;
 
+// #[macro_use] extern crate shrinkwraprs;
+//
+// #[derive(Shrinkwrap)]
+// struct Email(String);
+
+/*
+TODO
+ - Use shrinkwraprs
+
+
+*/
+
 fn main() {
     // simple logger
     SimpleLogger::new().init().unwrap();
@@ -143,8 +155,8 @@ fn main() {
                         }
                     }
 
-                    let width = render_instance.swapchain.properties.extent.width;
-                    let height = render_instance.swapchain.properties.extent.height;
+                    let width = render_instance.render_width();
+                    let height = render_instance.render_height();
 
                     let delta = [
                         cursor_position[0] - last_position[0],

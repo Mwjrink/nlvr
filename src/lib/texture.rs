@@ -320,7 +320,8 @@ impl Texture {
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         );
 
-        // let view = image.create_image_view(vk_context.device(), 1, format, vk::ImageAspectFlags::COLOR);
+        // let view =
+        image.create_image_view(vk_context.device(), 1, format, vk::ImageAspectFlags::COLOR);
 
         Texture {
             image,
@@ -351,9 +352,8 @@ impl Texture {
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
         );
 
-        let device = vk_context.device();
         image.transition_image_layout(
-            device,
+            vk_context.device(),
             command_pool,
             transition_queue,
             1,
@@ -361,6 +361,9 @@ impl Texture {
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         );
+
+        // let view =
+        image.create_image_view(vk_context.device(), 1, format, vk::ImageAspectFlags::DEPTH);
 
         Texture { image }
     }

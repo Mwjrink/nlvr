@@ -28,6 +28,8 @@ simple_logger = "1.9.0"
 image = "0.23.9"
 tobj = "2.0"
 
+shrinkwraprs = "0.3.0"
+
 galloc = { path = "../galloc" } # { git = "https://github.com/mwjrink/galloc", branch = "main" }
 
 # cgmath = "0.17"

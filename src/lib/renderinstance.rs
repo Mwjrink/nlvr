@@ -66,19 +66,23 @@ pub struct RenderInstance<T: UBO + Copy> {
     // and texture index for a texture array
     // model_index_count:      usize,
     vertex_buffer: Buffer,
-    vertex_alloc: Galloc, // TODO: use VMA when it implements buffer sub allocation
+    // TODO: use VMA when it implements buffer sub allocation
+    vertex_alloc: Galloc,
 
     index_buffer: Buffer,
-    index_alloc: Galloc, // TODO: use VMA when it implements buffer sub allocation
+    // TODO: use VMA when it implements buffer sub allocation
+    index_alloc: Galloc,
 
     renderables: Vec<Renderable>,
 
     descriptor_pool: vk::DescriptorPool,
     descriptor_sets: Vec<vk::DescriptorSet>,
 
-    command_buffers: Vec<CommandBuffer>, // TODO should this be here?
+    // TODO should this be here?
+    command_buffers: Vec<CommandBuffer>,
 
     // TODO should this go here?
+    // Uniforms are used for global data like proj, view mats etc
     global_uniform_buffers: Vec<Buffer>,
 
     uniform_buffers_align: [Align<T>; MAX_FRAMES_IN_FLIGHT as usize],
@@ -323,7 +327,6 @@ impl<T: UBO + Copy> RenderInstance<T> {
     well as its own set of attribute/uniform data inside descriptor sets.
     */
 
-    // TODO texture should not be optional, in theory
     // TODO should this be returning?
     pub fn renderable_from_file(&mut self, model_path: String, texture_path: String) -> usize {
         //-> Renderable {
@@ -621,7 +624,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .build();
                 let buffer_infos = [buffer_info];
 
-                // TODO dynamic number of textures, make this an array of texture samplers? something dynamic for the different objects to be transferred
+                // -T-O-D-O- dynamic number of textures, make this an array of texture samplers? something dynamic for the different objects to be transferred
                 // let image_info = vk::DescriptorImageInfo::builder()
                 //     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 //     .image_view()
@@ -636,7 +639,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                     .buffer_info(&buffer_infos);
 
-                // TODO dynamic number of textures
+                // -T-O-D-O- dynamic number of textures
                 // let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
                 //     .dst_set(*set)
                 //     .dst_binding(1)
@@ -1366,7 +1369,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             let found = extension_props.iter().any(|ext| {
                 let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
                 println!("{}", name.to_str().unwrap());
-                required == name.to_str().unwrap()
+                *required == name.to_str().unwrap()
             });
 
             if !found {
@@ -1414,6 +1417,12 @@ impl<T: UBO + Copy> RenderInstance<T> {
         };
 
         let device_extensions = Self::get_required_device_extensions();
+
+        // ! DEBUG
+        for ext in &device_extensions {
+            println!("DEVICE EXTENSION: {}", ext);
+        }
+
         let device_extensions_ptrs = device_extensions
             .iter()
             .map(|ext| ext.as_ptr() as *const i8)
@@ -1451,16 +1460,14 @@ impl<T: UBO + Copy> RenderInstance<T> {
         (device, graphics_queue, present_queue, transfer_queue)
     }
 
-    fn get_required_device_extensions() -> Vec<String> {
-        vec![
-            unsafe {
-                CStr::from_ptr(Swapchain::name().as_ptr())
-                    .to_string_lossy()
-                    .into_owned()
-            },
-            // "VK_EXT_descriptor_indexing".to_string(),
-            // "runtimeDescriptorArray".to_string(),
-        ]
+    fn get_required_device_extensions() -> Vec<&'static str> {
+        let mut result = Vec::new();
+        result.push(Swapchain::name().to_str().unwrap());
+        result
+        // vec![Swapchain::name().to_str()),
+        //     // "VK_EXT_descriptor_indexing".to_string(),
+        //     // "runtimeDescriptorArray".to_string(),
+        // ]
     }
 
     fn draw_indexed(
@@ -1617,6 +1624,14 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
     pub fn wait_gpu_idle(&self) {
         unsafe { self.vk_context.device().device_wait_idle().unwrap() };
+    }
+
+    pub fn render_width(&self) -> u32 {
+        self.swapchain.properties.extent.width
+    }
+
+    pub fn render_height(&self) -> u32 {
+        self.swapchain.properties.extent.height
     }
 }
 
