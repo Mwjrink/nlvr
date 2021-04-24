@@ -44,7 +44,7 @@ impl Texture {
     ) -> Texture {
         let cursor = fs::load(file_name);
         let image = image::load(cursor, image::ImageFormat::Jpeg).unwrap().flipv();
-        let image_as_rgb = image.to_rgba();
+        let image_as_rgb = image.to_rgba8();
         let width = (&image_as_rgb).width();
         let height = (&image_as_rgb).height();
         let max_mip_levels = ((width.min(height) as f32).log2().floor() + 1.0) as u32;

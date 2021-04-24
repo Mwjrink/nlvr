@@ -18,7 +18,7 @@ use super::{
 };
 use ash::{
     extensions::{
-        ext::DebugReport,
+        ext::DebugUtils,
         khr::{Surface, Swapchain},
     },
     util::Align,
@@ -28,11 +28,11 @@ use ash::{
 };
 use cgmath::Matrix4;
 use galloc::{Galloc, MemoryBlock};
+use raw_window_handle::HasRawWindowHandle;
 use std::{
     ffi::{CStr, CString},
     mem::{align_of, size_of},
 };
-use winit::window::Window;
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 3;
 const PAGE_SIZE: u64 = 2147483648; // 4294967296
@@ -95,19 +95,19 @@ pub struct RenderInstance<T: UBO + Copy> {
 }
 
 impl<T: UBO + Copy> RenderInstance<T> {
-    pub fn create(window: &Window) -> RenderInstance<T> {
+    pub fn create(dimensions: [u32; 2], window_handle: &dyn HasRawWindowHandle) -> RenderInstance<T> {
         log::debug!("Creating application.");
 
         // TODO dont use a constant, allow for double or triple buffering options
         // let frames_in_flight = 3;
 
-        let entry = Entry::new().expect("Failed to create entry.");
-        let instance = Self::create_instance(&entry, window);
+        let entry = unsafe { Entry::new().expect("Failed to create entry.") };
+        let instance = Self::create_instance(&entry, window_handle);
 
         let surface = Surface::new(&entry, &instance);
-        let surface_khr = unsafe { ash_window::create_surface(&entry, &instance, window, None).unwrap() };
+        let surface_khr = unsafe { ash_window::create_surface(&entry, &instance, window_handle, None).unwrap() };
 
-        let debug_report_callback = setup_debug_messenger(&entry, &instance);
+        let debug_utils_callback = setup_debug_messenger(&entry, &instance);
 
         let (physical_device, queue_families_indices) = Self::pick_physical_device(&instance, &surface, surface_khr);
 
@@ -122,7 +122,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         let vk_context = VkContext::new(
             entry,
             instance,
-            debug_report_callback,
+            debug_utils_callback,
             surface,
             surface_khr,
             physical_device,
@@ -142,7 +142,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         let swapchain = SwapchainWrapper::create_swapchain_and_images(
             &vk_context,
             queue_families_indices,
-            [window.inner_size().width, window.inner_size().height],
+            dimensions,
             graphics_command_pool,
             graphics_queue,
             msaa_samples,
@@ -475,7 +475,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         InFlightFrames::new(sync_objects_vec)
     }
 
-    fn create_instance(entry: &Entry, window: &Window) -> Instance {
+    fn create_instance(entry: &Entry, window: &dyn HasRawWindowHandle) -> Instance {
         let app_name = CString::new("Vulkan Application").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
         let app_info = vk::ApplicationInfo::builder()
@@ -489,7 +489,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let mut extension_names = extension_names.iter().map(|ext| ext.as_ptr()).collect::<Vec<_>>();
         if ENABLE_VALIDATION_LAYERS {
-            extension_names.push(DebugReport::name().as_ptr());
+            extension_names.push(DebugUtils::name().as_ptr());
         }
 
         let (_layer_names, layer_names_ptrs) = get_layer_names_and_pointers();
@@ -1663,7 +1663,8 @@ impl<T: UBO + Copy> Drop for RenderInstance<T> {
             device.destroy_command_pool(self.transfer_command_pool, None);
             device.destroy_command_pool(self.graphics_command_pool, None);
 
-            device.destroy_device(None);
+            // context drop destroys device
+            // device.destroy_device(None);
         }
     }
 }
