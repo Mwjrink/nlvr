@@ -1,24 +1,34 @@
+extern crate log;
+// extern crate vk_mem;
+
 pub mod lib {
-    pub mod buffer;
-    pub mod camera;
-    pub mod context;
-    pub mod debug;
-    pub mod fs;
-    pub mod image;
-    pub mod inflightframedata;
-    pub mod math;
-    pub mod queuefamilyindices;
-    pub mod reader;
+    mod buffer;
+    mod context;
+    mod debug;
+    mod fs;
+    mod image;
+    mod inflightframedata;
+    mod queuefamilyindices;
     pub mod renderable;
     pub mod renderinstance;
-    pub mod shaders;
-    pub mod swapchain;
-    pub mod swapchainproperties;
-    pub mod swapchainsupportdetails;
-    pub mod syncobjects;
-    pub mod texture;
+    mod shaders;
+    mod swapchain;
+    mod swapchainproperties;
+    mod swapchainsupportdetails;
+    mod syncobjects;
+    mod texture;
     pub mod ubo;
-    pub mod utils;
-    pub mod vertex;
-    // pub mod vulkan;
+    mod utils;
+    mod vertex;
 }
+
+/*
+TODO
+- multiple pipelines
+    - will allow for menus and ui
+    - pass in vertex and fragment shader paths
+- figure out the renderable return object or handle situation
+
+
+
+*/

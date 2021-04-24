@@ -3,26 +3,18 @@ name = "nlvr"
 version = "0.0.1"
 authors = ["Max Rink <mwjrink@gmail.com>"]
 edition = "2018"
-build = "build.rs"
-
-[[bin]]
-name = "nlvr"
-path = "src/main.rs"
-
-[lib]
-name = "nlvr"
-path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ash = "0.31"
-vk-mem = "0.2.2"
-winit = "0.24.0"
+ash = "0.32"
+# vk-mem = "0.2.2" // this is VMA bindings
+# winit = "0.24.0"
+raw-window-handle = "0.3.3"
 
 cgmath = "0.18.0"
 
-ash-window = "0.5"
+ash-window = "0.6"
 log = "0.4.11"
 simple_logger = "1.9.0"
 image = "0.23.9"
