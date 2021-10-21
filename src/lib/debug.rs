@@ -80,6 +80,8 @@ pub fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> Option<(Debu
     let create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
         .flags(vk::DebugUtilsMessengerCreateFlagsEXT::all())
         .pfn_user_callback(Some(vulkan_debug_callback))
+        .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
+        .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
         .build();
     let debug_utils = DebugUtils::new(entry, instance);
     let debug_utils_callback = unsafe { debug_utils.create_debug_utils_messenger(&create_info, None).unwrap() };

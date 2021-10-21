@@ -427,6 +427,9 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 &indices,
                 index_block.offset as u64,
             );
+
+            // log::debug!("indices size: {}", indices.len());
+
             index_buffer_ptr = BuffPtr {
                 offset: index_block.offset as u64,
                 size: indices_size,
@@ -505,6 +508,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
         unsafe { entry.create_instance(&instance_create_info, None).unwrap() }
     }
 
+    // TODO abstract out more functionality into sub files and functions to make things easier
+    // TODO use cmreader::read here for clusters
     fn load_model(asset_path: String) -> (Vec<Vertex>, Vec<u32>) {
         let mut cursor = fs::load(asset_path);
         let (models, _) =
@@ -1542,11 +1547,11 @@ impl<T: UBO + Copy> RenderInstance<T> {
             )
         };
         let image_index = match result {
-            Ok((image_index, _)) => image_index,
-            Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+            | Ok((image_index, _)) => image_index,
+            | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 return true;
             }
-            Err(error) => panic!("Error while acquiring next image. Cause: {}", error),
+            | Err(error) => panic!("Error while acquiring next image. Cause: {}", error),
         };
 
         unsafe { self.vk_context.device().reset_fences(&wait_fences).unwrap() };
@@ -1598,11 +1603,11 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .queue_present(self.present_queue, &present_info)
             };
             match result {
-                Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                | Ok(true) | Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                     return true;
                 }
-                Err(error) => panic!("Failed to present queue. Cause: {}", error),
-                _ => {}
+                | Err(error) => panic!("Failed to present queue. Cause: {}", error),
+                | _ => {}
             }
         }
 

@@ -116,6 +116,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmreader"
+version = "0.1.0"
+
+[[package]]
 name = "cocoa"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -395,6 +399,7 @@ dependencies = [
  "ash",
  "ash-window",
  "cgmath",
+ "cmreader",
  "galloc",
  "image",
  "log",
