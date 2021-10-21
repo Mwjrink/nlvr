@@ -24,6 +24,9 @@ shrinkwraprs = "0.3.0"
 
 galloc = { path = "../galloc" } # { git = "https://github.com/mwjrink/galloc", branch = "main" }
 
+cmreader = { path = "../gim/src/cmreader" }
+
+
 # cgmath = "0.17"
 # image = "0.23"
 # tobj = "2.0"
