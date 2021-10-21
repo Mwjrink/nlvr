@@ -111,6 +111,17 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let (physical_device, queue_families_indices) = Self::pick_physical_device(&instance, &surface, surface_khr);
 
+        let surface_capabilities =
+            unsafe { surface.get_physical_device_surface_capabilities(physical_device, surface_khr) };
+        if let Ok(capabilities) = surface_capabilities {
+            if capabilities
+                .supported_usage_flags
+                .contains(vk::ImageUsageFlags::TRANSFER_DST)
+            {
+                log::info!("transfer to swapchain supported!");
+            }
+        }
+
         // let test = unsafe { instance.get_physical_device_properties(physical_device) };
 
         // println!("test: {:?}", test);
@@ -448,7 +459,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let result = self.renderables.len();
         self.renderables.push(Renderable {
-            texture_index: texture_index as _,
+            texture_index,
             texture,
             //
             vertex_buffer_ptr,
@@ -1244,7 +1255,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 && indexing_features.runtime_descriptor_array == 1
                 && indexing_features.descriptor_binding_variable_descriptor_count == 1
             {
-                println!("Supports unbounded texture arrays!");
+                log::info!("Supports unbounded texture arrays!");
             }
         }
 
@@ -1373,7 +1384,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         for required in required_extentions.iter() {
             let found = extension_props.iter().any(|ext| {
                 let name = unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) };
-                println!("{}", name.to_str().unwrap());
+                // println!("{}", name.to_str().unwrap());
                 *required == name.to_str().unwrap()
             });
 
@@ -1424,9 +1435,9 @@ impl<T: UBO + Copy> RenderInstance<T> {
         let device_extensions = Self::get_required_device_extensions();
 
         // ! DEBUG
-        for ext in &device_extensions {
-            println!("DEVICE EXTENSION: {}", ext);
-        }
+        // for ext in &device_extensions {
+        //     println!("DEVICE EXTENSION: {}", ext);
+        // }
 
         let device_extensions_ptrs = device_extensions
             .iter()
