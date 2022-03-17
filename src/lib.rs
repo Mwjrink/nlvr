@@ -20,6 +20,8 @@ pub mod lib {
     pub mod ubo;
     mod utils;
     mod vertex;
+    mod material;
+    mod mesh;
 }
 
 /*

@@ -1,9 +1,13 @@
 use super::context::*;
 use super::utils::*;
-use ash::{version::DeviceV1_0, vk, Device};
+use ash::{
+    // version::DeviceV1_0, 
+    vk, Device};
 use std::mem::{align_of, size_of};
+use vk_mem::{VirtualAllocation};
 
 pub struct BuffPtr {
+    pub handle: VirtualAllocation,
     pub offset: u64,
     pub size: vk::DeviceSize,
 }
@@ -48,6 +52,8 @@ impl Buffer {
         usage: vk::BufferUsageFlags,
         mem_properties: vk::MemoryPropertyFlags,
     ) -> Buffer {
+        println!("Device Alloc: {}", size);
+
         let device = vk_context.device();
         let buffer = {
             let buffer_info = vk::BufferCreateInfo::builder()
@@ -212,6 +218,7 @@ impl Buffer {
     ) -> vk::DeviceSize {
         let device = vk_context.device();
         let size = (data.len() * size_of::<T>()) as vk::DeviceSize;
+        println!("Transfer to device local size: {}", size);
         let Buffer {
             buffer: staging_buffer,
             memory: staging_memory,

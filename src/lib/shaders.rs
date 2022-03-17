@@ -1,5 +1,7 @@
 use super::fs;
-use ash::{version::DeviceV1_0, vk, Device};
+use ash::{
+    // version::DeviceV1_0, 
+    vk, Device};
 
 pub fn read_shader_from_file<P: AsRef<std::path::Path,>,>(path: P,) -> Vec<u32,> {
     log::debug!("Loading shader file {}", path.as_ref().to_str().unwrap());

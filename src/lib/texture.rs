@@ -1,6 +1,6 @@
 use super::{buffer::*, context::*, fs, image::*, swapchainproperties::*, utils::*}; //vulkan::*};
 use ash::{
-    version::{DeviceV1_0, InstanceV1_0},
+    // version::{DeviceV1_0, InstanceV1_0},
     vk, Device,
 };
 use std::mem::{align_of, size_of};
@@ -52,6 +52,8 @@ impl Texture {
         let pixels = image_as_rgb.into_raw();
         let image_size = (pixels.len() * size_of::<u8>()) as vk::DeviceSize;
         let device = vk_context.device();
+
+        println!("Tex size: {}", image_size);
 
         let mut buffer = Buffer::create_buffer(
             vk_context,

@@ -4,7 +4,9 @@ use super::{context::*,
             swapchainproperties::*,
             swapchainsupportdetails::*,
             texture::*};
-use ash::{extensions::khr::Swapchain, version::DeviceV1_0, vk, Device};
+use ash::{extensions::khr::Swapchain, 
+    // version::DeviceV1_0, 
+    vk, Device};
 
 pub struct SwapchainWrapper {
     pub swapchain:     Swapchain,

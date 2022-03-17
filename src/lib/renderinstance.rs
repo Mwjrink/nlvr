@@ -4,6 +4,7 @@ use super::{
     debug::*,
     fs,
     inflightframedata::*,
+    mesh::Mesh, //vulkan::*,
     queuefamilyindices::*,
     renderable::*,
     shaders::*,
@@ -14,7 +15,7 @@ use super::{
     texture::*,
     ubo::*,
     utils::*,
-    vertex::*, //vulkan::*,
+    vertex::*,
 };
 use ash::{
     extensions::{
@@ -22,24 +23,32 @@ use ash::{
         khr::{Surface, Swapchain},
     },
     util::Align,
-    version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1},
+    // version::{DeviceV1_0, EntryV1_0, InstanceV1_0, InstanceV1_1},
     vk::{self, CommandBuffer},
-    Device, Entry, Instance,
+    Device,
+    Entry,
+    Instance,
 };
-use cgmath::Matrix4;
-use galloc::{Galloc, MemoryBlock};
+use cgmath::{Matrix4, SquareMatrix};
+use cmreader;
 use raw_window_handle::HasRawWindowHandle;
+use tobj::LoadOptions;
 use std::{
     ffi::{CStr, CString},
+    fs::canonicalize,
     mem::{align_of, size_of},
+};
+use vk_mem::{
+    Allocator, VirtualAllocationCreateFlags, VirtualBlock, VirtualBlockCreateFlags,
 };
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 3;
-const PAGE_SIZE: u64 = 2147483648; // 4294967296
+const PAGE_SIZE: u64 = 4294967296; // 2147483648
 
 pub struct RenderInstance<T: UBO + Copy> {
     vk_context: VkContext,
     //
+    // allocator: Allocator, // TODO use this for all allocations ?probably?
     pub swapchain: SwapchainWrapper,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
@@ -66,12 +75,10 @@ pub struct RenderInstance<T: UBO + Copy> {
     // and texture index for a texture array
     // model_index_count:      usize,
     vertex_buffer: Buffer,
-    // TODO: use VMA when it implements buffer sub allocation
-    vertex_alloc: Galloc,
+    vertex_alloc: VirtualBlock,
 
     index_buffer: Buffer,
-    // TODO: use VMA when it implements buffer sub allocation
-    index_alloc: Galloc,
+    index_alloc: VirtualBlock,
 
     renderables: Vec<Renderable>,
 
@@ -101,7 +108,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
         // TODO dont use a constant, allow for double or triple buffering options
         // let frames_in_flight = 3;
 
-        let entry = unsafe { Entry::new().expect("Failed to create entry.") };
+        let entry = unsafe {
+            Entry::linked()
+            //.expect("Failed to create entry.")
+        };
         let instance = Self::create_instance(&entry, window_handle);
 
         let surface = Surface::new(&entry, &instance);
@@ -267,6 +277,22 @@ impl<T: UBO + Copy> RenderInstance<T> {
         //     .sampler(texture_sampler).build();
         // let image_infos = [image_info];
 
+        let vertex_buffer = Self::create_vertex_buffer(&vk_context);
+        let vertex_alloc = VirtualBlock::new(vk_mem::VirtualBlockCreateInfo {
+            size: PAGE_SIZE,
+            flags: VirtualBlockCreateFlags::NONE,
+            allocation_callbacks: None,
+        })
+        .unwrap();
+
+        let index_buffer = Self::create_vertex_buffer(&vk_context);
+        let index_alloc = VirtualBlock::new(vk_mem::VirtualBlockCreateInfo {
+            size: PAGE_SIZE,
+            flags: VirtualBlockCreateFlags::NONE,
+            allocation_callbacks: None,
+        })
+        .unwrap();
+
         Self {
             vk_context,
             pipeline_layout: layout,
@@ -285,20 +311,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
             present_queue,
             transfer_queue,
             depth_format,
-            vertex_buffer: Buffer {
-                buffer: vk::Buffer::null(),
-                memory: vk::DeviceMemory::null(),
-                size: 0,
-            },
-            // TODO cull 0 size blocks in Galloc tree
-            vertex_alloc: Galloc::new(0, None),
-            index_buffer: Buffer {
-                buffer: vk::Buffer::null(),
-                memory: vk::DeviceMemory::null(),
-                size: 0,
-            },
-            // TODO cull 0 size blocks in Galloc tree
-            index_alloc: Galloc::new(0, None),
+            vertex_buffer,
+            vertex_alloc,
+            index_buffer,
+            index_alloc,
             renderables: Vec::new(),
 
             descriptor_pool,
@@ -379,23 +395,27 @@ impl<T: UBO + Copy> RenderInstance<T> {
         let (vertices, indices) = Self::load_model(model_path.clone());
 
         // vertex
-        let vertex_buffer_ptr;
-        {
-            if self.vertex_buffer.size == 0 {
-                // add to overall vertex buffers and overall index count/buffers?
-                let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
-
-                self.vertex_buffer = vertex_buffer;
-                self.vertex_alloc.free(MemoryBlock {
-                    offset: 0,
-                    size: PAGE_SIZE as usize,
-                });
-            }
+        let vertex_buffer_ptr = {
+            //             if self.vertex_buffer.size == 0 {
+            //                 // add to overall vertex buffers and overall index count/buffers?
+            //                 let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
+            //
+            //                 self.vertex_buffer = vertex_buffer;
+            //                 self.vertex_alloc.free(MemoryBlock {
+            //                     offset: 0,
+            //                     size: PAGE_SIZE as usize,
+            //                 });
+            //             }
 
             // TODO no unwrap here, handle running out of memory
             let vertex_block = self
                 .vertex_alloc
-                .allocate(vertices.len() * size_of::<Vertex>())
+                .allocate(
+                    (vertices.len() * size_of::<Vertex>()) as vk::DeviceSize,
+                    None,
+                    VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                    None,
+                )
                 .unwrap();
             let vertices_size = Self::transfer_vertices(
                 &self.vk_context,
@@ -403,49 +423,61 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 self.transfer_queue,
                 &self.vertex_buffer,
                 &vertices,
-                vertex_block.offset as u64,
+                vertex_block.1,
             );
-            vertex_buffer_ptr = BuffPtr {
-                offset: vertex_block.offset as u64,
+
+            // log::debug!("vertices size: {}", vertices.len());
+
+            BuffPtr {
+                handle: vertex_block.0,
+                offset: vertex_block.1,
                 size: vertices_size,
-            };
-        }
+            }
+        };
 
         // index
-        let index_buffer_ptr;
-        {
-            if self.index_buffer.size == 0 {
-                // add to overall vertex buffers and overall index count/buffers?
-                let index_buffer = Self::create_index_buffer(&self.vk_context);
-
-                self.index_buffer = index_buffer;
-                self.index_alloc.free(MemoryBlock {
-                    offset: 0,
-                    size: PAGE_SIZE as usize,
-                });
-            }
+        let index_buffer_ptr = {
+            //             if self.index_buffer.size == 0 {
+            //                 // add to overall vertex buffers and overall index count/buffers?
+            //                 let index_buffer = Self::create_index_buffer(&self.vk_context);
+            //
+            //                 self.index_buffer = index_buffer;
+            //                 self.index_alloc.free(MemoryBlock {
+            //                     offset: 0,
+            //                     size: PAGE_SIZE as usize,
+            //                 });
+            //             }
 
             // TODO manually offset indices before upload based on offset of vertex_ptr
             // This might not be necessary with the given draw command?
 
             // TODO no unwrap here, handle running out of memory
-            let index_block = self.index_alloc.allocate(indices.len() * size_of::<u32>()).unwrap();
+            let index_block = self
+                .index_alloc
+                .allocate(
+                    (indices.len() * size_of::<u32>()) as vk::DeviceSize,
+                    None,
+                    VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                    None,
+                )
+                .unwrap();
             let indices_size = Self::transfer_indices(
                 &self.vk_context,
                 self.transfer_command_pool,
                 self.transfer_queue,
                 &self.index_buffer,
                 &indices,
-                index_block.offset as u64,
+                index_block.1,
             );
 
             // log::debug!("indices size: {}", indices.len());
 
-            index_buffer_ptr = BuffPtr {
-                offset: index_block.offset as u64,
+            BuffPtr {
+                handle: index_block.0,
+                offset: index_block.1,
                 size: indices_size,
-            };
-        }
+            }
+        };
 
         // get some ptrs to the vertex and index buffers
 
@@ -459,18 +491,297 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let result = self.renderables.len();
         self.renderables.push(Renderable {
-            texture_index,
-            texture,
+            texture_index: Some(texture_index),
+            texture: Some(texture),
             //
-            vertex_buffer_ptr,
-            vertex_count: vertices.len(),
-            //
-            index_buffer_ptr,
-            index_count: indices.len(),
+            meshes: vec![Mesh {
+                vertex_buffer_ptr,
+                vertex_count: vertices.len(),
+                //
+                index_buffer_ptr,
+                index_count: indices.len(),
+            }],
             //
             asset_path: model_path,
             //
             instances: Vec::new(),
+        });
+
+        return result;
+    }
+
+    // TODO shrinkwrapr around BuffPtr so this is vertexBuffer?
+    pub fn upload_vertices(&mut self, vertices: &[Vertex]) -> BuffPtr {
+        //         if self.vertex_buffer.size == 0 {
+        //             // add to overall vertex buffers and overall index count/buffers?
+        //             let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
+        //
+        //             self.vertex_buffer = vertex_buffer;
+        //             self.vertex_alloc.free(MemoryBlock {
+        //                 offset: 0,
+        //                 size: PAGE_SIZE as usize,
+        //             });
+        //         }
+
+        // TODO no unwrap here, handle running out of memory
+        let vertex_block = self
+            .vertex_alloc
+            .allocate(
+                (vertices.len() * size_of::<f32>()) as vk::DeviceSize,
+                None,
+                VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                None,
+            )
+            .unwrap();
+        let vertices_size = Self::transfer_vertices(
+            &self.vk_context,
+            self.transfer_command_pool,
+            self.transfer_queue,
+            &self.vertex_buffer,
+            &vertices,
+            vertex_block.1,
+        );
+        BuffPtr {
+            handle: vertex_block.0,
+            offset: vertex_block.1,
+            size: vertices_size,
+        }
+    }
+
+    // TODO shrinkwrapr around BuffPtr so this is indexBuffer?
+    pub fn upload_indices(&mut self, indices: &[u32]) -> BuffPtr {
+        //         if self.index_buffer.size == 0 {
+        //             // add to overall vertex buffers and overall index count/buffers?
+        //             let index_buffer = Self::create_index_buffer(&self.vk_context);
+        //
+        //             self.index_buffer = index_buffer;
+        //             self.index_alloc.free(MemoryBlock {
+        //                 offset: 0,
+        //                 size: PAGE_SIZE as usize,
+        //             });
+        //         }
+
+        // TODO manually offset indices before upload based on offset of vertex_ptr
+        // This might not be necessary with the given draw command?
+
+        // TODO no unwrap here, handle running out of memory
+        let index_block = self
+            .index_alloc
+            .allocate(
+                (indices.len() * size_of::<f32>()) as vk::DeviceSize,
+                None,
+                VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                None,
+            )
+            .unwrap();
+        let indices_size = Self::transfer_indices(
+            &self.vk_context,
+            self.transfer_command_pool,
+            self.transfer_queue,
+            &self.index_buffer,
+            &indices,
+            index_block.1,
+        );
+
+        // log::debug!("indices size: {}", indices.len());
+
+        BuffPtr {
+            handle: index_block.0,
+            offset: index_block.1,
+            size: indices_size,
+        }
+    }
+
+    // TODO should this be returning?
+    pub fn renderable_from_cm_file(&mut self, model_path: String /* , texture_path: String */) -> usize {
+        //-> Renderable {
+        // if let Some(tex_path) = texture_path {
+        // let texture = Texture::create_texture_image(
+        //     &self.vk_context,
+        //     self.graphics_command_pool,
+        //     self.graphics_queue,
+        //     texture_path,
+        // );
+        // }
+
+        // let image_info = vk::DescriptorImageInfo::builder()
+        //     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        //     .image_view(texture.image.view.unwrap())
+        //     .sampler(self.texture_sampler)
+        //     .build();
+
+        // let texture_index = self.descriptor_image_count;
+        // self.descriptor_image_count += 1;
+
+        /*         unsafe {
+            let image_infos = &[image_info];
+            for set in &self.descriptor_sets {
+                let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
+                    .dst_set(*set)
+                    .dst_binding(1)
+                    .dst_array_element(texture_index)
+                    // .descriptor_count
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(image_infos);
+
+                self.vk_context
+                    .device()
+                    .update_descriptor_sets(&[sampler_descriptor_write.build()], &[]);
+            }
+        } */
+
+        let path = canonicalize(model_path).unwrap();
+
+        let mut tree = cmreader::reader::read(&path.to_str().unwrap());
+        tree.load_all();
+        // let (vertices, indices) = Self::load_model(model_path.clone());
+
+        let mut meshes: Vec<Mesh> = Vec::with_capacity(tree.len());
+
+        self.renderables.reserve(tree.len());
+        for cluster in tree.iter_all() {
+            // vertex
+            let vertex_count;
+            let vertex_buffer_ptr = {
+                //                 if self.vertex_buffer.size == 0 {
+                //                     // add to overall vertex buffers and overall index count/buffers?
+                //                     let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
+                //
+                //                     self.vertex_buffer = vertex_buffer;
+                //                     self.vertex_alloc.free(MemoryBlock {
+                //                         offset: 0,
+                //                         size: PAGE_SIZE as usize,
+                //                     });
+                //                 }
+
+                // TODO no unwrap here, handle running out of memory
+                let vertex_block = self
+                    .vertex_alloc
+                    .allocate(
+                        (cluster.pos.len() * size_of::<f32>()) as vk::DeviceSize,
+                        None,
+                        VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                        None,
+                    )
+                    .unwrap();
+                // TODO: chunks_unchecked is currently an unstable library
+                let vertices: Vec<Vertex> = {
+                    (0..cluster.pos.len())
+                        .step_by(3)
+                        .map(|i| Vertex {
+                            pos: [cluster.pos[i], cluster.pos[i + 1], cluster.pos[i + 2]],
+                            coords: [0.0, 0.0],
+                        })
+                        .collect()
+
+                    // unsafe {
+                    //     cluster.pos.as_chunks_unchecked::<3>() map(|x| {
+                    //         Vertex {
+                    //             pos: *x,
+                    //             coords: [0.0, 0.0]
+                    //         }
+                    //     }).collect();
+                    // };
+                };
+
+                vertex_count = vertices.len();
+                println!("Vertex Count: {}", vertex_count);
+                println!("Cluster Pos: {}", cluster.pos.len());
+
+                let vertices_size = Self::transfer_vertices(
+                    &self.vk_context,
+                    self.transfer_command_pool,
+                    self.transfer_queue,
+                    &self.vertex_buffer,
+                    &vertices,
+                    vertex_block.1,
+                );
+
+                BuffPtr {
+                    handle: vertex_block.0,
+                    offset: vertex_block.1,
+                    size: vertices_size,
+                }
+            };
+
+            // index
+            let index_count;
+            let index_buffer_ptr = {
+                //                 if self.index_buffer.size == 0 {
+                //                     // add to overall vertex buffers and overall index count/buffers?
+                //                     let index_buffer = Self::create_index_buffer(&self.vk_context);
+                //
+                //                     self.index_buffer = index_buffer;
+                //                     self.index_alloc.free(MemoryBlock {
+                //                         offset: 0,
+                //                         size: PAGE_SIZE as usize,
+                //                     });
+                //                 }
+
+                // TODO manually offset indices before upload based on offset of vertex_ptr
+                // This might not be necessary with the given draw command?
+
+                index_count = cluster.idx.len();
+                println!("Index Count: {}", index_count);
+
+                // TODO no unwrap here, handle running out of memory
+                let index_block = self
+                    .index_alloc
+                    .allocate(
+                        (cluster.idx.len() * size_of::<f32>()) as vk::DeviceSize,
+                        None,
+                        VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                        None,
+                    )
+                    .unwrap();
+                let indices_size = Self::transfer_indices(
+                    &self.vk_context,
+                    self.transfer_command_pool,
+                    self.transfer_queue,
+                    &self.index_buffer,
+                    &cluster.idx,
+                    index_block.1,
+                );
+
+                // log::debug!("indices size: {}", indices.len());
+
+                BuffPtr {
+                    handle: index_block.0,
+                    offset: index_block.1,
+                    size: indices_size,
+                }
+            };
+
+            meshes.push(Mesh {
+                vertex_buffer_ptr,
+                vertex_count,
+
+                index_buffer_ptr,
+                index_count,
+            });
+        }
+
+        // get some ptrs to the vertex and index buffers
+
+        // model_index_count:      usize,
+        // vertex_buffer:          Buffer,
+        // vertex_size:            usize,
+        // index_buffer:           Buffer,
+        // index_size:             usize,
+
+        // self.vertex_buffer.add some shit to it
+
+        let mesh_len = meshes.len();
+        let result = self.renderables.len();
+        self.renderables.push(Renderable {
+            texture_index: None,
+            texture: None,
+            //
+            meshes,
+            //
+            asset_path: path.to_str().unwrap().to_string(),
+            //
+            instances: vec![Matrix4::identity(); mesh_len],
         });
 
         return result;
@@ -494,10 +805,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
         let engine_name = CString::new("No Engine").unwrap();
         let app_info = vk::ApplicationInfo::builder()
             .application_name(app_name.as_c_str())
-            .application_version(vk::make_version(0, 1, 0))
+            .application_version(vk::make_api_version(0, 0, 1, 0))
             .engine_name(engine_name.as_c_str())
-            .engine_version(vk::make_version(0, 1, 0))
-            .api_version(vk::make_version(1, 2, 148));
+            .engine_version(vk::make_api_version(0, 0, 1, 0))
+            .api_version(vk::make_api_version(0, 1, 2, 148));
 
         let extension_names = ash_window::enumerate_required_extensions(window).unwrap();
 
@@ -524,7 +835,15 @@ impl<T: UBO + Copy> RenderInstance<T> {
     fn load_model(asset_path: String) -> (Vec<Vertex>, Vec<u32>) {
         let mut cursor = fs::load(asset_path);
         let (models, _) =
-            tobj::load_obj_buf(&mut cursor, true, |_| Ok((vec![], std::collections::HashMap::new()))).unwrap();
+            tobj::load_obj_buf(&mut cursor, &LoadOptions {
+                single_index: true,
+                triangulate: true,
+                ignore_points: true,
+                ignore_lines: true,
+            }, |asset_path| {
+                let mut cursor = fs::load(asset_path);
+                tobj::load_mtl_buf(&mut cursor)
+            }).unwrap();
 
         let mesh = &models[0].mesh;
         let positions = mesh.positions.as_slice();
@@ -551,10 +870,12 @@ impl<T: UBO + Copy> RenderInstance<T> {
     }
 
     fn create_vertex_buffer(vk_context: &VkContext) -> Buffer {
+        println!("Vertex buff size: {}", PAGE_SIZE);
         Buffer::create_device_local_buffer(vk_context, vk::BufferUsageFlags::VERTEX_BUFFER, PAGE_SIZE)
     }
 
     fn create_index_buffer(vk_context: &VkContext) -> Buffer {
+        println!("Vertex buff size: {}", PAGE_SIZE);
         Buffer::create_device_local_buffer(vk_context, vk::BufferUsageFlags::INDEX_BUFFER, PAGE_SIZE)
     }
 
@@ -566,6 +887,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         vertices: &[Vertex],
         offset: u64,
     ) -> u64 {
+        print!("Vert buff size; ");
         Buffer::transfer_to_device_local_buffer::<u32, _>(
             vk_context,
             command_pool,
@@ -584,6 +906,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         indices: &[u32],
         offset: u64,
     ) -> u64 {
+        print!("Vert buff size; ");
         Buffer::transfer_to_device_local_buffer::<u16, _>(
             vk_context,
             command_pool,
@@ -674,6 +997,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
     fn create_uniform_buffers(vk_context: &VkContext, count: usize) -> Vec<Buffer> {
         let size = size_of::<T>() as vk::DeviceSize;
         let mut buffers = Vec::new();
+
+        println!("UBO size: {}", size);
 
         for _ in 0..count {
             let buffer = Buffer::create_buffer(
@@ -959,7 +1284,10 @@ impl<T: UBO + Copy> RenderInstance<T> {
         };
         let viewports = [viewport];
         let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
+            offset: vk::Offset2D {
+                x: 0,
+                y: 0,
+            },
             extent: swapchain_properties.extent,
         };
         let scissors = [scissor];
@@ -1003,7 +1331,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             .build();
 
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
-            .color_write_mask(vk::ColorComponentFlags::all())
+            .color_write_mask(vk::ColorComponentFlags::RGBA)
             .blend_enable(false)
             .src_color_blend_factor(vk::BlendFactor::ONE)
             .dst_color_blend_factor(vk::BlendFactor::ZERO)
@@ -1141,14 +1469,20 @@ impl<T: UBO + Copy> RenderInstance<T> {
                         },
                     },
                     vk::ClearValue {
-                        depth_stencil: vk::ClearDepthStencilValue { depth: 1.0, stencil: 0 },
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
                     },
                 ];
                 let render_pass_begin_info = vk::RenderPassBeginInfo::builder()
                     .render_pass(render_pass)
                     .framebuffer(framebuffer)
                     .render_area(vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
+                        offset: vk::Offset2D {
+                            x: 0,
+                            y: 0,
+                        },
                         extent: swapchain_properties.extent,
                     })
                     .clear_values(&clear_values)
@@ -1165,6 +1499,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             // TODO offsets are used for non interleaved data
             unsafe { device.cmd_bind_vertex_buffers(buffer, 0, &vertex_buffers, &[0]) };
 
+            // TODO try to not bind these every frame
             // Bind index buffer
             unsafe { device.cmd_bind_index_buffer(buffer, index_buffer, 0, vk::IndexType::UINT32) };
 
@@ -1184,21 +1519,22 @@ impl<T: UBO + Copy> RenderInstance<T> {
             let mut cumulative_vertex_count = 0;
             let mut cumulative_index_count = 0;
             for renderable in renderables {
-                for transform in &renderable.instances {
+                for mesh in &renderable.meshes {
                     Self::draw_indexed(
                         device,
                         buffer,
-                        renderable.index_count,
+                        mesh.index_count,
                         pipeline_layout,
-                        *transform,
+                        // TODO use instances for the transform matrix
+                        Matrix4::identity(),
                         cumulative_index_count,
                         cumulative_vertex_count,
-                        renderable.texture_index,
+                        renderable.texture_index.unwrap_or(0),
                     );
-                }
 
-                cumulative_vertex_count += renderable.vertex_count as i32;
-                cumulative_index_count += renderable.index_count as u32;
+                    cumulative_vertex_count += mesh.vertex_count as i32;
+                    cumulative_index_count += mesh.index_count as u32;
+                }
             }
 
             // End render pass
@@ -1311,7 +1647,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             print!("Queue {} with queue a count of {} has: ", index, family.queue_count);
 
             if family.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                print!("graphics, ");
+                print!("GRAPHICS, ");
                 if graphics.is_none() {
                     graphics = Some(index);
                 }
@@ -1323,30 +1659,22 @@ impl<T: UBO + Copy> RenderInstance<T> {
                     .unwrap()
             };
             if present_support {
-                print!("present, ");
+                print!("PRESENT, ");
                 if present.is_none() {
                     present = Some(index);
                 }
             }
 
             if family.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                print!("compute, ");
+                print!("COMPUTE, ");
                 // compute = Some(index,);
             }
 
             if family.queue_flags.contains(vk::QueueFlags::TRANSFER) {
-                print!("transfer, ");
+                print!("TRANSFER, ");
                 if index == 1 {
                     transfer = Some(index);
                 }
-            }
-
-            if family.queue_flags.contains(vk::QueueFlags::RESERVED_5_KHR) {
-                print!("RESERVED_5_KHR, ");
-            }
-
-            if family.queue_flags.contains(vk::QueueFlags::RESERVED_6_KHR) {
-                print!("RESERVED_6_KHR, ");
             }
 
             if family.queue_flags.contains(vk::QueueFlags::SPARSE_BINDING) {
@@ -1638,14 +1966,17 @@ impl<T: UBO + Copy> RenderInstance<T> {
         }
     }
 
+    #[inline(always)]
     pub fn wait_gpu_idle(&self) {
         unsafe { self.vk_context.device().device_wait_idle().unwrap() };
     }
 
+    #[inline(always)]
     pub fn render_width(&self) -> u32 {
         self.swapchain.properties.extent.width
     }
 
+    #[inline(always)]
     pub fn render_height(&self) -> u32 {
         self.swapchain.properties.extent.height
     }
@@ -1657,7 +1988,9 @@ impl<T: UBO + Copy> Drop for RenderInstance<T> {
         let device = self.vk_context.device();
 
         for renderable in &mut self.renderables {
-            renderable.texture.destroy(device);
+            if let Some(mut texture) = renderable.texture {
+                texture.destroy(device);
+            }
         }
 
         self.swapchain.cleanup(device);

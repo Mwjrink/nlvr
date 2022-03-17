@@ -1,6 +1,6 @@
 use ash::{
     extensions::ext::DebugUtils,
-    version::EntryV1_0,
+    // version::EntryV1_0,
     vk::{self, Bool32, DebugUtilsMessengerCallbackDataEXT},
     Entry, Instance,
 };
@@ -78,10 +78,10 @@ pub fn setup_debug_messenger(entry: &Entry, instance: &Instance) -> Option<(Debu
         return None;
     }
     let create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-        .flags(vk::DebugUtilsMessengerCreateFlagsEXT::all())
+        .flags(vk::DebugUtilsMessengerCreateFlagsEXT::empty())
         .pfn_user_callback(Some(vulkan_debug_callback))
         .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
-        .message_type(vk::DebugUtilsMessageTypeFlagsEXT::all())
+        .message_type(vk::DebugUtilsMessageTypeFlagsEXT::GENERAL | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION)
         .build();
     let debug_utils = DebugUtils::new(entry, instance);
     let debug_utils_callback = unsafe { debug_utils.create_debug_utils_messenger(&create_info, None).unwrap() };

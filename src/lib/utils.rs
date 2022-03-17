@@ -1,5 +1,7 @@
 // utility functions
-use ash::{version::DeviceV1_0, vk, Device};
+use ash::{
+    // version::DeviceV1_0, 
+    vk, Device};
 
 /// Return a `&[u8]` for any sized object passed in.
 pub unsafe fn any_as_u8_slice<T: Sized>(any: &T) -> &[u8] {
