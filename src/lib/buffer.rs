@@ -8,7 +8,7 @@ use vk_mem::{VirtualAllocation};
 
 pub struct BuffPtr {
     pub handle: VirtualAllocation,
-    pub offset: u64,
+    pub offset: vk::DeviceSize,
     pub size: vk::DeviceSize,
 }
 
@@ -52,7 +52,7 @@ impl Buffer {
         usage: vk::BufferUsageFlags,
         mem_properties: vk::MemoryPropertyFlags,
     ) -> Buffer {
-        println!("Device Alloc: {}", size);
+        // println!("Device Alloc: {}", size);
 
         let device = vk_context.device();
         let buffer = {
@@ -218,7 +218,7 @@ impl Buffer {
     ) -> vk::DeviceSize {
         let device = vk_context.device();
         let size = (data.len() * size_of::<T>()) as vk::DeviceSize;
-        println!("Transfer to device local size: {}", size);
+        // println!("Transfer to device local size: {}", size);
         let Buffer {
             buffer: staging_buffer,
             memory: staging_memory,

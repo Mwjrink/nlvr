@@ -31,16 +31,35 @@ use ash::{
 };
 use cgmath::{Matrix4, SquareMatrix};
 use cmreader;
+use rand::prelude::*;
 use raw_window_handle::HasRawWindowHandle;
-use tobj::LoadOptions;
 use std::{
+    collections::{vec_deque, VecDeque},
     ffi::{CStr, CString},
     fs::canonicalize,
     mem::{align_of, size_of},
 };
-use vk_mem::{
-    Allocator, VirtualAllocationCreateFlags, VirtualBlock, VirtualBlockCreateFlags,
-};
+use tobj::LoadOptions;
+use vk_mem::{Allocator, VirtualAllocationCreateFlags, VirtualBlock, VirtualBlockCreateFlags};
+
+const COLOR_LIST: [[f32; 3]; 16] = [
+    [0.0, 0.0, 0.0],
+    [1.0, 1.0, 1.0],
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [1.0, 1.0, 0.0],
+    [0.0, 1.0, 1.0],
+    [1.0, 0.0, 1.0],
+    [0.75, 0.75, 0.75],
+    [0.5, 0.5, 0.5],
+    [0.5, 0.0, 0.0],
+    [0.5, 0.5, 0.0],
+    [0.0, 0.5, 0.0],
+    [0.5, 0.0, 0.5],
+    [0.0, 0.5, 0.5],
+    [0.0, 0.0, 0.5],
+];
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 3;
 const PAGE_SIZE: u64 = 4294967296; // 2147483648
@@ -99,6 +118,8 @@ pub struct RenderInstance<T: UBO + Copy> {
     texture_sampler: vk::Sampler,
 
     descriptor_image_count: u32,
+
+    rng: rand::rngs::ThreadRng,
 }
 
 impl<T: UBO + Copy> RenderInstance<T> {
@@ -285,13 +306,15 @@ impl<T: UBO + Copy> RenderInstance<T> {
         })
         .unwrap();
 
-        let index_buffer = Self::create_vertex_buffer(&vk_context);
+        let index_buffer = Self::create_index_buffer(&vk_context);
         let index_alloc = VirtualBlock::new(vk_mem::VirtualBlockCreateInfo {
             size: PAGE_SIZE,
             flags: VirtualBlockCreateFlags::NONE,
             allocation_callbacks: None,
         })
         .unwrap();
+
+        let rng = rand::thread_rng();
 
         Self {
             vk_context,
@@ -332,6 +355,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
             texture_sampler,
 
             descriptor_image_count: 0,
+
+            rng,
         }
     }
 
@@ -355,43 +380,50 @@ impl<T: UBO + Copy> RenderInstance<T> {
     */
 
     // TODO should this be returning?
-    pub fn renderable_from_file(&mut self, model_path: String, texture_path: String) -> usize {
+    pub fn renderable_from_file(&mut self, model_path: String, texture_path: Option<String>) -> usize {
         //-> Renderable {
         // if let Some(tex_path) = texture_path {
-        let texture = Texture::create_texture_image(
-            &self.vk_context,
-            self.graphics_command_pool,
-            self.graphics_queue,
-            texture_path,
-        );
-        // }
+        let (texture_index, texture) = if let Some(texture_path) = texture_path {
+            let texture = Texture::create_texture_image(
+                &self.vk_context,
+                self.graphics_command_pool,
+                self.graphics_queue,
+                texture_path,
+            );
+            // }
 
-        let image_info = vk::DescriptorImageInfo::builder()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(texture.image.view.unwrap())
-            .sampler(self.texture_sampler)
-            .build();
+            let image_info = vk::DescriptorImageInfo::builder()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(texture.image.view.unwrap())
+                .sampler(self.texture_sampler)
+                .build();
 
-        let texture_index = self.descriptor_image_count;
-        self.descriptor_image_count += 1;
+            let texture_index = self.descriptor_image_count;
+            self.descriptor_image_count += 1;
 
-        unsafe {
-            let image_infos = &[image_info];
-            for set in &self.descriptor_sets {
-                let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
-                    .dst_set(*set)
-                    .dst_binding(1)
-                    .dst_array_element(texture_index)
-                    // .descriptor_count
-                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                    .image_info(image_infos);
+            unsafe {
+                let image_infos = &[image_info];
+                for set in &self.descriptor_sets {
+                    let sampler_descriptor_write = vk::WriteDescriptorSet::builder()
+                        .dst_set(*set)
+                        .dst_binding(1)
+                        .dst_array_element(texture_index)
+                        // .descriptor_count
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(image_infos);
 
-                self.vk_context
-                    .device()
-                    .update_descriptor_sets(&[sampler_descriptor_write.build()], &[]);
+                    self.vk_context
+                        .device()
+                        .update_descriptor_sets(&[sampler_descriptor_write.build()], &[]);
+                }
             }
-        }
 
+            (Some(texture_index), Some(texture))
+        } else {
+            (None, None)
+        };
+
+        // println!("Trying to load file: {}", model_path.clone());
         let (vertices, indices) = Self::load_model(model_path.clone());
 
         // vertex
@@ -491,8 +523,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let result = self.renderables.len();
         self.renderables.push(Renderable {
-            texture_index: Some(texture_index),
-            texture: Some(texture),
+            texture_index,
+            texture,
             //
             meshes: vec![Mesh {
                 vertex_buffer_ptr,
@@ -638,71 +670,50 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
         let mut meshes: Vec<Mesh> = Vec::with_capacity(tree.len());
 
-        self.renderables.reserve(tree.len());
-        for cluster in tree.iter_all() {
-            // vertex
-            let vertex_count;
-            let vertex_buffer_ptr = {
-                //                 if self.vertex_buffer.size == 0 {
-                //                     // add to overall vertex buffers and overall index count/buffers?
-                //                     let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
-                //
-                //                     self.vertex_buffer = vertex_buffer;
-                //                     self.vertex_alloc.free(MemoryBlock {
-                //                         offset: 0,
-                //                         size: PAGE_SIZE as usize,
-                //                     });
-                //                 }
+        // // TODO this is temporary while these are separate renderables
+        // self.renderables.reserve(tree.len());
 
-                // TODO no unwrap here, handle running out of memory
-                let vertex_block = self
-                    .vertex_alloc
-                    .allocate(
-                        (cluster.pos.len() * size_of::<f32>()) as vk::DeviceSize,
-                        None,
-                        VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
-                        None,
-                    )
-                    .unwrap();
-                // TODO: chunks_unchecked is currently an unstable library
-                let vertices: Vec<Vertex> = {
-                    (0..cluster.pos.len())
-                        .step_by(3)
-                        .map(|i| Vertex {
-                            pos: [cluster.pos[i], cluster.pos[i + 1], cluster.pos[i + 2]],
-                            coords: [0.0, 0.0],
-                        })
-                        .collect()
+        let mut to_check = VecDeque::new();
+        let mut leaves = Vec::new();
+        to_check.push_back(tree.roots[0]);
+        to_check.push_back(tree.roots[1]);
+        //         while let Some(idx) = to_check.pop_front() {
+        //             let node = tree.get_node(&(idx as usize));
+        //
+        //             for child in node.children {
+        //                 if child != u32::MAX {
+        //                     to_check.push_back(child);
+        //                     leaf = false;
+        //                 }
+        //             }
+        //
+        //             if leaf {
+        //                 leaves.push(idx);
+        //             }
+        //         }
 
-                    // unsafe {
-                    //     cluster.pos.as_chunks_unchecked::<3>() map(|x| {
-                    //         Vertex {
-                    //             pos: *x,
-                    //             coords: [0.0, 0.0]
-                    //         }
-                    //     }).collect();
-                    // };
-                };
-
-                vertex_count = vertices.len();
-                println!("Vertex Count: {}", vertex_count);
-                println!("Cluster Pos: {}", cluster.pos.len());
-
-                let vertices_size = Self::transfer_vertices(
-                    &self.vk_context,
-                    self.transfer_command_pool,
-                    self.transfer_queue,
-                    &self.vertex_buffer,
-                    &vertices,
-                    vertex_block.1,
-                );
-
-                BuffPtr {
-                    handle: vertex_block.0,
-                    offset: vertex_block.1,
-                    size: vertices_size,
+        for (idx, node) in tree.nodes.iter().enumerate() {
+            let mut leaf = true;
+            for child in node.children {
+                if child != u32::MAX {
+                    to_check.push_back(child);
+                    leaf = false;
                 }
-            };
+            }
+            if leaf {
+                leaves.push(idx);
+            }
+        }
+
+        println!(
+            "there are {} leaf nodes out of {} nodes",
+            leaves.len(),
+            tree.nodes.len()
+        );
+
+        for leaf_idx in leaves {
+            // cluster in tree.iter_all() {
+            let cluster = tree.get_cluster(&(leaf_idx as u32)).unwrap();
 
             // index
             let index_count;
@@ -722,18 +733,19 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 // This might not be necessary with the given draw command?
 
                 index_count = cluster.idx.len();
-                println!("Index Count: {}", index_count);
+                // println!("Index Count: {}", index_count);
 
                 // TODO no unwrap here, handle running out of memory
                 let index_block = self
                     .index_alloc
                     .allocate(
-                        (cluster.idx.len() * size_of::<f32>()) as vk::DeviceSize,
+                        (cluster.idx.len() * size_of::<u32>()) as vk::DeviceSize,
                         None,
                         VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
                         None,
                     )
                     .unwrap();
+                // TODO transfer these and the vertices all at once? mapped memory?
                 let indices_size = Self::transfer_indices(
                     &self.vk_context,
                     self.transfer_command_pool,
@@ -752,6 +764,69 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 }
             };
 
+            // vertex
+            let vertex_count;
+            let vertex_buffer_ptr = {
+                //                 if self.vertex_buffer.size == 0 {
+                //                     // add to overall vertex buffers and overall index count/buffers?
+                //                     let vertex_buffer = Self::create_vertex_buffer(&self.vk_context);
+                //
+                //                     self.vertex_buffer = vertex_buffer;
+                //                     self.vertex_alloc.free(MemoryBlock {
+                //                         offset: 0,
+                //                         size: PAGE_SIZE as usize,
+                //                     });
+                //                 }
+
+                // TODO: chunks_unchecked is currently an unstable library
+                let vertices: Vec<Vertex> = {
+                    let color_idx = self.rng.gen_range(0..16);
+                    (0..cluster.pos.len())
+                        .step_by(3)
+                        .map(|i| Vertex {
+                            pos: [cluster.pos[i], cluster.pos[i + 1], cluster.pos[i + 2]],
+                            color: COLOR_LIST[color_idx],
+                            coords: [0.0, 0.0],
+                        })
+                        .collect()
+
+                    // unsafe {
+                    //     cluster.pos.as_chunks_unchecked::<3>() map(|x| {
+                    //         Vertex {
+                    //             pos: *x,
+                    //             coords: [0.0, 0.0]
+                    //         }
+                    //     }).collect();
+                    // };
+                };
+
+                vertex_count = vertices.len();
+                // TODO no unwrap here, handle running out of memory
+                let vertex_block = self
+                    .vertex_alloc
+                    .allocate(
+                        (vertices.len() * size_of::<Vertex>()) as vk::DeviceSize,
+                        None,
+                        VirtualAllocationCreateFlags::STRATEGY_MIN_TIME,
+                        None,
+                    )
+                    .unwrap();
+                let vertices_size = Self::transfer_vertices(
+                    &self.vk_context,
+                    self.transfer_command_pool,
+                    self.transfer_queue,
+                    &self.vertex_buffer,
+                    &vertices,
+                    vertex_block.1,
+                );
+
+                BuffPtr {
+                    handle: vertex_block.0,
+                    offset: vertex_block.1,
+                    size: vertices_size,
+                }
+            };
+
             meshes.push(Mesh {
                 vertex_buffer_ptr,
                 vertex_count,
@@ -759,7 +834,33 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 index_buffer_ptr,
                 index_count,
             });
+
+            //             self.renderables.push(Renderable {
+            //                 texture_index: None,
+            //                 texture: None,
+            //                 //
+            //                 meshes: vec![Mesh {
+            //                     vertex_buffer_ptr,
+            //                     vertex_count,
+            //
+            //                     index_buffer_ptr,
+            //                     index_count,
+            //                 }],
+            //                 //
+            //                 asset_path: path.to_str().unwrap().to_string(),
+            //                 //
+            //                 instances: vec![Matrix4::identity()],
+            //             });
+
+            // break;
         }
+
+        // for mesh in &meshes {
+        //     println!(
+        //         "Leaf index_count: {}, vertex_count: {}",
+        //         mesh.index_count, mesh.vertex_count
+        //     );
+        // }
 
         // get some ptrs to the vertex and index buffers
 
@@ -784,7 +885,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             instances: vec![Matrix4::identity(); mesh_len],
         });
 
-        return result;
+        result
     }
 
     pub fn get_renderable(&mut self, index: usize) -> &mut Renderable {
@@ -834,16 +935,20 @@ impl<T: UBO + Copy> RenderInstance<T> {
     // TODO use cmreader::read here for clusters
     fn load_model(asset_path: String) -> (Vec<Vertex>, Vec<u32>) {
         let mut cursor = fs::load(asset_path);
-        let (models, _) =
-            tobj::load_obj_buf(&mut cursor, &LoadOptions {
+        let (models, _) = tobj::load_obj_buf(
+            &mut cursor,
+            &LoadOptions {
                 single_index: true,
                 triangulate: true,
                 ignore_points: true,
                 ignore_lines: true,
-            }, |asset_path| {
+            },
+            |asset_path| {
                 let mut cursor = fs::load(asset_path);
                 tobj::load_mtl_buf(&mut cursor)
-            }).unwrap();
+            },
+        )
+        .unwrap();
 
         let mesh = &models[0].mesh;
         let positions = mesh.positions.as_slice();
@@ -855,13 +960,18 @@ impl<T: UBO + Copy> RenderInstance<T> {
             let x = positions[i * 3];
             let y = positions[i * 3 + 1];
             let z = positions[i * 3 + 2];
-            let u = coords[i * 2];
-            let v = coords[i * 2 + 1];
+            let coords = if coords.is_empty() {
+                [0.0, 0.0]
+            } else {
+                let u = coords[i * 2];
+                let v = coords[i * 2 + 1];
+                [u, v]
+            };
 
             let vertex = Vertex {
                 pos: [x, y, z],
-                // color:  [1.0, 1.0, 1.0,],
-                coords: [u, v],
+                color: [1.0, 0.5, 0.5],
+                coords,
             };
             vertices.push(vertex);
         }
@@ -887,7 +997,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         vertices: &[Vertex],
         offset: u64,
     ) -> u64 {
-        print!("Vert buff size; ");
+        // print!("Vert buff size; ");
         Buffer::transfer_to_device_local_buffer::<u32, _>(
             vk_context,
             command_pool,
@@ -906,7 +1016,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         indices: &[u32],
         offset: u64,
     ) -> u64 {
-        print!("Vert buff size; ");
+        // print!("Vert buff size; ");
         Buffer::transfer_to_device_local_buffer::<u16, _>(
             vk_context,
             command_pool,
@@ -1240,8 +1350,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
         vertex_binding_descs: vk::VertexInputBindingDescription,
         vertex_attribute_descs: &[vk::VertexInputAttributeDescription],
     ) -> (vk::Pipeline, vk::PipelineLayout) {
-        let vertex_source = read_shader_from_file("shaders/vert.spv");
-        let fragment_source = read_shader_from_file("shaders/frag.spv");
+        let vertex_source = read_shader_from_file("shaders/shader_stage.vert.spv");
+        let fragment_source = read_shader_from_file("shaders/shader_stage.frag.spv");
 
         log::debug!("Compiling shaders...");
 
@@ -1516,24 +1626,24 @@ impl<T: UBO + Copy> RenderInstance<T> {
                 )
             };
 
-            let mut cumulative_vertex_count = 0;
-            let mut cumulative_index_count = 0;
+            // let mut cumulative_vertex_count = 0;
+            // let mut cumulative_index_count = 0;
             for renderable in renderables {
-                for mesh in &renderable.meshes {
+                for idx in 0..renderable.meshes.len() {
                     Self::draw_indexed(
                         device,
                         buffer,
-                        mesh.index_count,
+                        renderable.meshes[idx].index_count,
                         pipeline_layout,
                         // TODO use instances for the transform matrix
-                        Matrix4::identity(),
-                        cumulative_index_count,
-                        cumulative_vertex_count,
+                        renderable.instances[idx],
+                        (renderable.meshes[idx].index_buffer_ptr.offset / size_of::<u32>() as u64) as u32,
+                        (renderable.meshes[idx].vertex_buffer_ptr.offset / size_of::<Vertex>() as u64) as i32,
                         renderable.texture_index.unwrap_or(0),
                     );
 
-                    cumulative_vertex_count += mesh.vertex_count as i32;
-                    cumulative_index_count += mesh.index_count as u32;
+                    // cumulative_vertex_count += renderable.meshes[idx].vertex_count as i32;
+                    // cumulative_index_count += renderable.meshes[idx].index_count as u32;
                 }
             }
 
@@ -1820,8 +1930,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
         index_count: usize,
         pipeline_layout: vk::PipelineLayout,
         transform: Matrix4<f32>,
-        cumulative_index_count: u32,
-        cumulative_vertex_count: i32,
+        first_index: u32,
+        vertex_offset: i32,
         texture_index: u32,
     ) {
         // Push constants
@@ -1844,16 +1954,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         };
 
         // Draw
-        unsafe {
-            device.cmd_draw_indexed(
-                buffer,
-                index_count as _,
-                1,
-                cumulative_index_count,
-                cumulative_vertex_count,
-                0,
-            )
-        };
+        unsafe { device.cmd_draw_indexed(buffer, index_count as u32, 1, first_index, vertex_offset, 0) };
     }
 
     // TODO allow any number of ubos to be passed?

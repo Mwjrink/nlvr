@@ -13,9 +13,12 @@ struct Attributes {
 pub struct Mesh {
     pub vertex_buffer_ptr: BuffPtr,
     pub vertex_count: usize,
+    // pub vertex_offset: usize,
     //
     pub index_buffer_ptr: BuffPtr,
     pub index_count: usize,
+    // pub index_offset: usize,
+    //
     // attributes: Attributes,
     // indices: u32,
     // material: u32,
