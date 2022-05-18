@@ -22,6 +22,8 @@ pub mod lib {
     mod vertex;
     mod material;
     mod mesh;
+    pub mod window;
+    pub mod surface;
 }
 
 /*

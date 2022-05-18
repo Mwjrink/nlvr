@@ -8,6 +8,7 @@ use super::{
     queuefamilyindices::*,
     renderable::*,
     shaders::*,
+    surface::*,
     swapchain::*,
     swapchainproperties::*,
     swapchainsupportdetails::*,
@@ -32,9 +33,8 @@ use ash::{
 use cgmath::{Matrix4, SquareMatrix};
 use cmreader;
 use rand::prelude::*;
-use raw_window_handle::HasRawWindowHandle;
 use std::{
-    collections::{vec_deque, VecDeque},
+    collections::VecDeque,
     ffi::{CStr, CString},
     fs::canonicalize,
     mem::{align_of, size_of},
@@ -42,8 +42,7 @@ use std::{
 use tobj::LoadOptions;
 use vk_mem::{Allocator, VirtualAllocationCreateFlags, VirtualBlock, VirtualBlockCreateFlags};
 
-const COLOR_LIST: [[f32; 3]; 16] = [
-    [0.0, 0.0, 0.0],
+const COLOR_LIST: [[f32; 3]; 15] = [
     [1.0, 1.0, 1.0],
     [1.0, 0.0, 0.0],
     [0.0, 1.0, 0.0],
@@ -123,20 +122,21 @@ pub struct RenderInstance<T: UBO + Copy> {
 }
 
 impl<T: UBO + Copy> RenderInstance<T> {
-    pub fn create(dimensions: [u32; 2], window_handle: &dyn HasRawWindowHandle) -> RenderInstance<T> {
+    pub fn create<O>(output_surface: O) -> RenderInstance<T>
+    where
+        O: OutputSurface,
+    {
         log::debug!("Creating application.");
 
         // TODO dont use a constant, allow for double or triple buffering options
         // let frames_in_flight = 3;
 
-        let entry = unsafe {
-            Entry::linked()
-            //.expect("Failed to create entry.")
-        };
-        let instance = Self::create_instance(&entry, window_handle);
+        let entry = Entry::linked();
+        let extension_names = output_surface.get_required_extensions();
+        let instance = Self::create_instance(&entry, extension_names);
 
         let surface = Surface::new(&entry, &instance);
-        let surface_khr = unsafe { ash_window::create_surface(&entry, &instance, window_handle, None).unwrap() };
+        let surface_khr = output_surface.create_surface(&instance, &entry);
 
         let debug_utils_callback = setup_debug_messenger(&entry, &instance);
 
@@ -181,6 +181,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         let depth_format = Self::find_depth_format(&vk_context);
         let msaa_samples = vk_context.get_max_usable_sample_count();
 
+        let dimensions = output_surface.get_dimensions();
         let swapchain = SwapchainWrapper::create_swapchain_and_images(
             &vk_context,
             queue_families_indices,
@@ -190,6 +191,8 @@ impl<T: UBO + Copy> RenderInstance<T> {
             msaa_samples,
             depth_format,
         );
+
+        // TODO make render pass a generic construct etc
 
         let render_pass =
             Self::create_render_pass(vk_context.device(), swapchain.properties, msaa_samples, depth_format);
@@ -359,6 +362,11 @@ impl<T: UBO + Copy> RenderInstance<T> {
             rng,
         }
     }
+
+    // TODO
+    // pub fn set_output<O: OutputSurface>(&mut self, ) {
+    //     self.output =
+    // }
 
     // TODO
     /*
@@ -901,7 +909,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         InFlightFrames::new(sync_objects_vec)
     }
 
-    fn create_instance(entry: &Entry, window: &dyn HasRawWindowHandle) -> Instance {
+    fn create_instance(entry: &Entry, extension_names: Vec<&CStr>) -> Instance {
         let app_name = CString::new("Vulkan Application").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
         let app_info = vk::ApplicationInfo::builder()
@@ -910,8 +918,6 @@ impl<T: UBO + Copy> RenderInstance<T> {
             .engine_name(engine_name.as_c_str())
             .engine_version(vk::make_api_version(0, 0, 1, 0))
             .api_version(vk::make_api_version(0, 1, 2, 148));
-
-        let extension_names = ash_window::enumerate_required_extensions(window).unwrap();
 
         let mut extension_names = extension_names.iter().map(|ext| ext.as_ptr()).collect::<Vec<_>>();
         if ENABLE_VALIDATION_LAYERS {
