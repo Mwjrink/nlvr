@@ -7,24 +7,24 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ash = "0.36.0+1.3.206"
-raw-window-handle = "0.3.4"
+ash = "0.37.3+1.3.251"
+raw-window-handle = "0.5.2"
 
 cgmath = "0.18.0"
 
-ash-window = "0.9.1"
-log = "0.4.11"
-simple_logger = "2.1.0"
-image = "0.24.1"
-tobj = "3.2.1"
+ash-window = "0.12.0"
+log = "0.4.19"
+simple_logger = "4.2.0"
+image = "0.24.6"
+# tobj = "4.0.0"
 
 rand = "0.8.5"
 
 shrinkwraprs = "0.3.0"
 
-cmreader = { path = "../gim/src/cmreader" }
+# cmreader = { path = "../gim/src/cmreader" }
 
-vk-mem = { path = "../vk-mem-rs" }
+vk-mem = { git = "https://github.com/gwihlidal/vk-mem-rs", branch = "master" }
     # git = "https://github.com/mwjrink/vk-mem-rs", branch = "master" }
 
 # winit = "0.24.0"

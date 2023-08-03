@@ -31,7 +31,7 @@ use ash::{
     Instance,
 };
 use cgmath::{Matrix4, SquareMatrix};
-use cmreader;
+// use cmreader;
 use rand::prelude::*;
 use std::{
     collections::VecDeque,
@@ -39,7 +39,7 @@ use std::{
     fs::canonicalize,
     mem::{align_of, size_of},
 };
-use tobj::LoadOptions;
+// use tobj::LoadOptions;
 use vk_mem::{Allocator, VirtualAllocationCreateFlags, VirtualBlock, VirtualBlockCreateFlags};
 
 const COLOR_LIST: [[f32; 3]; 15] = [
@@ -909,7 +909,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
         InFlightFrames::new(sync_objects_vec)
     }
 
-    fn create_instance(entry: &Entry, extension_names: Vec<&CStr>) -> Instance {
+    fn create_instance(entry: &Entry, extension_names: Vec<*const i8>) -> Instance {
         let app_name = CString::new("Vulkan Application").unwrap();
         let engine_name = CString::new("No Engine").unwrap();
         let app_info = vk::ApplicationInfo::builder()
@@ -919,7 +919,7 @@ impl<T: UBO + Copy> RenderInstance<T> {
             .engine_version(vk::make_api_version(0, 0, 1, 0))
             .api_version(vk::make_api_version(0, 1, 2, 148));
 
-        let mut extension_names = extension_names.iter().map(|ext| ext.as_ptr()).collect::<Vec<_>>();
+        let mut extension_names = extension_names.clone();
         if ENABLE_VALIDATION_LAYERS {
             extension_names.push(DebugUtils::name().as_ptr());
         }
@@ -939,51 +939,51 @@ impl<T: UBO + Copy> RenderInstance<T> {
 
     // TODO abstract out more functionality into sub files and functions to make things easier
     // TODO use cmreader::read here for clusters
-    fn load_model(asset_path: String) -> (Vec<Vertex>, Vec<u32>) {
-        let mut cursor = fs::load(asset_path);
-        let (models, _) = tobj::load_obj_buf(
-            &mut cursor,
-            &LoadOptions {
-                single_index: true,
-                triangulate: true,
-                ignore_points: true,
-                ignore_lines: true,
-            },
-            |asset_path| {
-                let mut cursor = fs::load(asset_path);
-                tobj::load_mtl_buf(&mut cursor)
-            },
-        )
-        .unwrap();
-
-        let mesh = &models[0].mesh;
-        let positions = mesh.positions.as_slice();
-        let coords = mesh.texcoords.as_slice();
-        let vertex_count = mesh.positions.len() / 3;
-
-        let mut vertices = Vec::with_capacity(vertex_count);
-        for i in 0..vertex_count {
-            let x = positions[i * 3];
-            let y = positions[i * 3 + 1];
-            let z = positions[i * 3 + 2];
-            let coords = if coords.is_empty() {
-                [0.0, 0.0]
-            } else {
-                let u = coords[i * 2];
-                let v = coords[i * 2 + 1];
-                [u, v]
-            };
-
-            let vertex = Vertex {
-                pos: [x, y, z],
-                color: [1.0, 0.5, 0.5],
-                coords,
-            };
-            vertices.push(vertex);
-        }
-
-        (vertices, mesh.indices.clone())
-    }
+    // fn load_model(asset_path: String) -> (Vec<Vertex>, Vec<u32>) {
+    //     let mut cursor = fs::load(asset_path);
+    //     let (models, _) = tobj::load_obj_buf(
+    //         &mut cursor,
+    //         &LoadOptions {
+    //             single_index: true,
+    //             triangulate: true,
+    //             ignore_points: true,
+    //             ignore_lines: true,
+    //         },
+    //         |asset_path| {
+    //             let mut cursor = fs::load(asset_path);
+    //             tobj::load_mtl_buf(&mut cursor)
+    //         },
+    //     )
+    //     .unwrap();
+    //
+    //     let mesh = &models[0].mesh;
+    //     let positions = mesh.positions.as_slice();
+    //     let coords = mesh.texcoords.as_slice();
+    //     let vertex_count = mesh.positions.len() / 3;
+    //
+    //     let mut vertices = Vec::with_capacity(vertex_count);
+    //     for i in 0..vertex_count {
+    //         let x = positions[i * 3];
+    //         let y = positions[i * 3 + 1];
+    //         let z = positions[i * 3 + 2];
+    //         let coords = if coords.is_empty() {
+    //             [0.0, 0.0]
+    //         } else {
+    //             let u = coords[i * 2];
+    //             let v = coords[i * 2 + 1];
+    //             [u, v]
+    //         };
+    //
+    //         let vertex = Vertex {
+    //             pos: [x, y, z],
+    //             color: [1.0, 0.5, 0.5],
+    //             coords,
+    //         };
+    //         vertices.push(vertex);
+    //     }
+    //
+    //     (vertices, mesh.indices.clone())
+    // }
 
     fn create_vertex_buffer(vk_context: &VkContext) -> Buffer {
         println!("Vertex buff size: {}", PAGE_SIZE);

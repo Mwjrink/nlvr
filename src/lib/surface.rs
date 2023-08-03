@@ -6,5 +6,5 @@ pub trait OutputSurface {
 
     fn create_surface(&self, instance: &Instance, entry: &Entry) -> vk::SurfaceKHR;
 
-    fn get_required_extensions(&self) -> Vec<&CStr>;
+    fn get_required_extensions(&self) -> Vec<*const i8>;
 }
